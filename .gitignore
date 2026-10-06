@@ -6,3 +6,4 @@ contracts/cache/
 contracts/broadcast/
 workflow/binary.wasm
 *.log
+.cre_build_tmp.js
