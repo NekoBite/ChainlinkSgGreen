@@ -1,0 +1,3 @@
+{ "name": "green-mock-api", "private": true, "type": "module",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "viem": "2.34.0" } }

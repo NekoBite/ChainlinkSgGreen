@@ -1,0 +1,8 @@
+{
+  "name": "green-yield-workflow",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@chainlink/cre-sdk": "1.23.0", "viem": "2.34.0", "zod": "3.25.76" },
+  "devDependencies": { "typescript": "5.9.3" }
+}

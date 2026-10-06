@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GreenYield SPV</title>
+<style>
+:root{--bg:#0b1210;--card:#121c19;--line:#22332e;--fg:#e6f2ee;--mut:#8aa39b;--g:#3ddc97;--r:#ff6b6b;--a:#ffc857}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:24px}
+h1{margin:0 0 4px;font-size:26px}.sub{color:var(--mut);margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.k{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.06em}.v{font-size:28px;font-weight:700}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-weight:700;font-size:13px}
+.ok{background:#3ddc9722;color:var(--g)}.bad{background:#ff6b6b22;color:var(--r)}
+table{width:100%;border-collapse:collapse}td,th{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--mut);font-weight:500;font-size:13px}
+.mode{font-size:22px;font-weight:800}a{color:var(--g)}code{color:var(--a)}
+</style></head><body>
+<h1>☀️🔋 GreenYield SPV</h1>
+<div class="sub">The operator runs the plant. The SPV owns it. Token holders own the revenue. <b>Chainlink CRE</b> checks the physics, asks the AI, and pays — or refuses.</div>
+<div class="grid">
+  <div class="card"><div class="k">Operator is reporting</div><div class="mode" id="mode">…</div><div class="k" style="margin-top:8px">Epoch <span id="ep"></span></div></div>
+  <div class="card"><div class="k">Revenue in escrow</div><div class="v" id="esc">…</div><div class="k">USDC waiting for verification</div></div>
+  <div class="card"><div class="k">Paid to token holders</div><div class="v" id="paid" style="color:var(--g)">…</div><div class="k">USDC, verified on-chain</div></div>
+</div>
+<div class="grid" style="margin-top:16px">
+  <div class="card"><div class="k">Operator claim vs utility meter</div><table id="claim"></table></div>
+  <div class="card"><div class="k">Token holders</div><table id="hold"></table></div>
+</div>
+<div class="card" style="margin-top:16px"><div class="k">Epochs settled by Chainlink CRE (read live from Sepolia)</div><table id="eps"></table>
+<div class="sub" style="margin:10px 0 0" id="hub"></div></div>
+<script>
+const $=id=>document.getElementById(id), usd=n=>n.toLocaleString(undefined,{maximumFractionDigits:2});
+async function tick(){
+  try{
+    const s=await (await fetch('/state')).json(), c=s.chain||{};
+    $('mode').innerHTML=s.mode==='fraud'?'<span style="color:var(--r)">🚨 LYING (inflated numbers)</span>':'<span style="color:var(--g)">✅ HONEST</span>';
+    $('ep').textContent=s.epochId;
+    const cl=s.claim; $('claim').innerHTML=`<tr><th>Metric</th><th>MWh</th></tr>
+      <tr><td>Solar generated</td><td>${cl.solarGenMWh}</td></tr><tr><td>Solar exported</td><td>${cl.solarExportMWh}</td></tr>
+      <tr><td>Battery charged</td><td>${cl.chargeFromSolarMWh+cl.chargeFromGridMWh}</td></tr><tr><td>Battery discharged</td><td>${cl.dischargeMWh}</td></tr>
+      <tr><td><b>Claimed total export</b></td><td><b>${(cl.solarExportMWh+cl.dischargeMWh).toFixed(1)}</b></td></tr>
+      <tr><td>🔌 Utility meter (truth)</td><td><b>${s.meterMWh}</b></td></tr>`;
+    if(c.error){$('esc').textContent='—';$('paid').textContent='—';$('eps').innerHTML=`<tr><td>${c.error}</td></tr>`;return}
+    $('esc').textContent=usd(c.escrowUsdc); $('paid').textContent=usd(c.totalPaidUsdc);
+    $('hold').innerHTML='<tr><th>Holder</th><th>Shares</th><th>Claimable USDC</th></tr>'+c.holders.map(h=>`<tr><td>${h.label}</td><td>${(h.shares/1e4).toFixed(0)}%</td><td style="color:var(--g)">${usd(h.claimableUsdc)}</td></tr>`).join('');
+    $('eps').innerHTML='<tr><th>Epoch</th><th>Verdict</th><th>AI score</th><th>Physics</th><th>Paid USDC</th><th>Time</th></tr>'+
+      (c.epochs.length?c.epochs.map(e=>{const v=e.violations.toString(2).split('').filter(x=>x==='1').length;
+      return `<tr><td>${e.epochId}</td><td><span class="pill ${e.approved?'ok':'bad'}">${e.approved?'APPROVED':'REJECTED'}</span></td><td>${e.aiScore}/100</td><td>${v?`❌ ${v} of 6 rules broken`:'✅ 6/6 passed'}</td><td>${usd(e.paidUsdc)}</td><td>${new Date(e.timestamp*1000).toLocaleTimeString()}</td></tr>`}).join(''):'<tr><td>No epochs yet</td></tr>');
+    $('hub').innerHTML=`Hub contract: <a target=_blank href="https://sepolia.etherscan.io/address/${c.hub}#events">${c.hub}</a>`;
+  }catch(e){console.log(e)}
+}
+tick(); setInterval(tick,4000);
+</script></body></html>
