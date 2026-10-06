@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 import {Script, console} from "forge-std/Script.sol";
 import {GreenYieldHub} from "../src/GreenYieldHub.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
+import {SPVToken} from "../src/SPVToken.sol";
 
 /// Deploys everything and seeds one SPV with escrowed revenue.
 /// FORWARDER defaults to the Sepolia MockKeystoneForwarder used by `cre workflow simulate`.
@@ -19,7 +20,8 @@ contract Deploy is Script {
         uint256[] memory s = new uint256[](3);
         s[0] = 500_000e18; s[1] = 300_000e18; s[2] = 200_000e18;
         // Lopburi, Thailand — real utility-scale solar region
-        hub.registerSPV("Lopburi Solar + BESS SPV", me, 80, 200, 148000, 1006000, h, s);
+        SPVToken token = new SPVToken("Lopburi Solar + BESS SPV", "SPV", address(hub), usdc, h, s);
+        hub.registerSPV("Lopburi Solar + BESS SPV", me, token, 80, 200, 148000, 1006000);
         usdc.mint(me, 100_000e6);
         usdc.approve(address(hub), type(uint256).max);
         hub.escrowRevenue(0, 100_000e6);

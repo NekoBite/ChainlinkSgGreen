@@ -14,7 +14,8 @@ contract HubTest is Test {
         hub = new GreenYieldHub(fwd, usdc);
         address[] memory h = new address[](2); h[0] = a; h[1] = b;
         uint256[] memory s = new uint256[](2); s[0] = 600e18; s[1] = 400e18;
-        hub.registerSPV("Lopburi Solar+BESS", address(this), 80, 200, 148000, 1006000, h, s);
+        SPVToken token = new SPVToken("Lopburi Solar+BESS", "SPV", address(hub), usdc, h, s);
+        hub.registerSPV("Lopburi Solar+BESS", address(this), token, 80, 200, 148000, 1006000);
         usdc.mint(address(this), 50_000e6); usdc.approve(address(hub), type(uint256).max);
         hub.escrowRevenue(0, 50_000e6);
     }

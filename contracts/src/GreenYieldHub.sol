@@ -44,11 +44,12 @@ contract GreenYieldHub is ReceiverTemplate {
 
     constructor(address forwarder, IERC20 _usdc) ReceiverTemplate(forwarder) { usdc = _usdc; }
 
-    function registerSPV(string calldata name, address operator, uint32 solarMWp, uint32 batteryMWh,
-        int32 latE4, int32 lonE4, address[] calldata holders, uint256[] calldata shares)
-        external onlyOwner returns (uint256 id)
+    /// The SPVToken is deployed separately (with this hub as its `hub`) — embedding its creation
+    /// code here would push the hub's deployment past the per-transaction gas cap.
+    function registerSPV(string calldata name, address operator, SPVToken t, uint32 solarMWp, uint32 batteryMWh,
+        int32 latE4, int32 lonE4) external onlyOwner returns (uint256 id)
     {
-        SPVToken t = new SPVToken(name, "SPV", usdc, holders, shares);
+        require(t.hub() == address(this), "token hub");
         id = spvs.length;
         spvs.push(SPV(name, operator, t, solarMWp, batteryMWh, latE4, lonE4, 0, 0));
         emit SPVRegistered(id, name, address(t));

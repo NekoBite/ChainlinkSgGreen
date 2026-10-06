@@ -16,7 +16,6 @@ import {
   cre,
   encodeCallMsg,
   getNetwork,
-  hexToBase64,
   json,
   LATEST_BLOCK_NUMBER,
   median,
@@ -249,7 +248,7 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   );
   const report = runtime.report(prepareReportRequest(payload)).result();
   const w = evm
-    .writeReport(runtime, { receiver: hexToBase64(cfg.hubAddress), report, gasConfig: { gasLimit: cfg.gasLimit } })
+    .writeReport(runtime, { receiver: cfg.hubAddress, report, gasConfig: { gasLimit: cfg.gasLimit } })
     .result();
   if (w.txStatus !== TxStatus.SUCCESS) throw new Error(`write failed: ${w.errorMessage ?? w.txStatus}`);
   const tx = bytesToHex(w.txHash ?? new Uint8Array(32));

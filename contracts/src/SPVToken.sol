@@ -17,10 +17,10 @@ contract SPVToken is ERC20 {
     event Distributed(uint256 amount);
     event Claimed(address indexed holder, uint256 amount);
 
-    constructor(string memory n, string memory s, IERC20 _usdc, address[] memory holders, uint256[] memory shares)
-        ERC20(n, s)
+    constructor(string memory n, string memory s, address _hub, IERC20 _usdc, address[] memory holders,
+        uint256[] memory shares) ERC20(n, s)
     {
-        hub = msg.sender;
+        hub = _hub;
         usdc = _usdc;
         for (uint256 i; i < holders.length; i++) _mint(holders[i], shares[i]);
     }
