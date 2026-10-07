@@ -45,6 +45,8 @@ esac
 RPC="${RPC_URL:-${SEPOLIA_RPC:-$DEF_RPC}}"; [ "$CHAIN" != sepolia ] && RPC="${RPC_URL:-$DEF_RPC}"
 export FORWARDER="${FORWARDER:-$MOCK_FWD}"
 DEPLOYED=".deployed-$CHAIN"
+# earlier runs stored the Ethereum Sepolia deployment as .deployed-v2
+[ "$CHAIN" = sepolia ] && [ ! -f "$DEPLOYED" ] && [ -f .deployed-v2 ] && cp .deployed-v2 "$DEPLOYED"
 echo "Chain: ${B}$CHAIN${N} ($CHAIN_NAME)"
 ME=$(cast wallet address --private-key "$PK")
 BAL=$(cast balance "$ME" --rpc-url "$RPC" --ether)
@@ -61,6 +63,7 @@ cre whoami | head -3
 
 # ── 4. deploy (once) ──────────────────────────────────────
 step "4/6 Smart contracts on $CHAIN"
+[ -f "$DEPLOYED" ] || [ "${DRY:-0}" != 1 ] || die "No contracts on $CHAIN yet, and DRY mode cannot deploy. Run with CHAIN=sepolia (already deployed), or fund the wallet on $CHAIN and run without DRY=1."
 if [ -f $DEPLOYED ]; then echo "Already deployed: $(cat $DEPLOYED)  (delete $DEPLOYED to redeploy)"
 else
   (cd contracts && DEPLOY_OUT="../$DEPLOYED" CRE_ETH_PRIVATE_KEY="$PK" forge script script/Deploy.s.sol --rpc-url "$RPC" --broadcast --slow $EVMV 2>&1 | grep -E "USDC|HUB|Error|error" || true)
