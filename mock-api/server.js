@@ -5,12 +5,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPublicClient, http as rpc, parseAbi } from "viem";
-import { sepolia } from "viem/chains";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8788);
 const RPC = process.env.SEPOLIA_RPC || "https://ethereum-sepolia-rpc.publicnode.com";
-const hubFile = path.join(dir, "..", ".deployed-v2");
+const hubFile = path.join(dir, "..", process.env.DEPLOYED_FILE || ".deployed-base");
+const EXPLORER = process.env.EXPLORER || "https://sepolia.basescan.org";
 
 // ── Site & weather ────────────────────────────────────────────────
 // Lopburi, Thailand. Hourly irradiance for *yesterday* (local time) from Open-Meteo —
@@ -79,7 +79,7 @@ const HUB_ABI = parseAbi([
 ]);
 const TOKEN_ABI = parseAbi(["function claimable(address) view returns (uint256)", "function balanceOf(address) view returns (uint256)"]);
 const HOLDERS = { "Investor A (deployer)": null, "Investor B": "0x1111111111111111111111111111111111111111", "Investor C": "0x2222222222222222222222222222222222222222" };
-const client = createPublicClient({ chain: sepolia, transport: rpc(RPC) });
+const client = createPublicClient({ transport: rpc(RPC) });
 
 async function chainState() {
   if (!fs.existsSync(hubFile)) return { error: "not deployed yet — run ./run-demo.sh" };
@@ -104,7 +104,7 @@ async function chainState() {
     holders.push({ label, addr, shares: Number(b / 10n ** 18n), claimableUsdc: Number(c) / 1e6 });
   }
   const region = await client.readContract({ address: hub, abi: HUB_ABI, functionName: "gridRegion", args: [0n] }).catch(() => "");
-  return { hub, token, name, region, solarMWp, batteryMWh, escrowUsdc: Number(escrow) / 1e6, totalPaidUsdc: Number(totalPaid) / 1e6, epochs: epochs.reverse(), holders };
+  return { explorer: EXPLORER, hub, token, name, region, solarMWp, batteryMWh, escrowUsdc: Number(escrow) / 1e6, totalPaidUsdc: Number(totalPaid) / 1e6, epochs: epochs.reverse(), holders };
 }
 
 const send = (res, code, obj, type = "application/json") => {

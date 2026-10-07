@@ -34,14 +34,25 @@ set -a; . ./.env; set +a
 [ -n "${CRE_ETH_PRIVATE_KEY:-}" ] || die "CRE_ETH_PRIVATE_KEY is empty in .env"
 case "$CRE_ETH_PRIVATE_KEY" in 0x*) PK="$CRE_ETH_PRIVATE_KEY";; *) PK="0x$CRE_ETH_PRIVATE_KEY";; esac
 export CRE_ETH_PRIVATE_KEY="${PK#0x}"
-RPC="${SEPOLIA_RPC:-https://ethereum-sepolia-rpc.publicnode.com}"
+# ── chain: CHAIN=base (default) | fuji | sepolia ──
+CHAIN="${CHAIN:-base}"
+case "$CHAIN" in
+  base)    CHAIN_NAME=ethereum-testnet-sepolia-base-1; DEF_RPC=https://sepolia.base.org;                     MOCK_FWD=0x82300bd7c3958625581cc2f77bc6464dcecdf3e5; EXPLORER=https://sepolia.basescan.org;      COIN="Base Sepolia ETH"; EVMV="";;
+  fuji)    CHAIN_NAME=avalanche-testnet-fuji;          DEF_RPC=https://api.avax-test.network/ext/bc/C/rpc;  MOCK_FWD=0x2e7371a5d032489e4f60216d8d898a4c10805963; EXPLORER=https://testnet.snowtrace.io;      COIN="Fuji AVAX";        EVMV="";;
+  sepolia) CHAIN_NAME=ethereum-testnet-sepolia;        DEF_RPC=https://ethereum-sepolia-rpc.publicnode.com; MOCK_FWD=0x15fC6ae953E024d975e77382eEeC56A9101f9F88; EXPLORER=https://sepolia.etherscan.io;     COIN="Sepolia ETH";      EVMV="--evm-version amsterdam";;
+  *) die "Unknown CHAIN=$CHAIN (use base, fuji or sepolia)";;
+esac
+RPC="${RPC_URL:-${SEPOLIA_RPC:-$DEF_RPC}}"; [ "$CHAIN" != sepolia ] && RPC="${RPC_URL:-$DEF_RPC}"
+export FORWARDER="${FORWARDER:-$MOCK_FWD}"
+DEPLOYED=".deployed-$CHAIN"
+echo "Chain: ${B}$CHAIN${N} ($CHAIN_NAME)"
 ME=$(cast wallet address --private-key "$PK")
 BAL=$(cast balance "$ME" --rpc-url "$RPC" --ether)
-echo "Wallet $ME  balance ${BAL} Sepolia ETH"
-[ "${DRY:-0}" != 1 ] && awk "BEGIN{exit !($BAL < 0.02)}" && die "Need ≥ 0.02 Sepolia ETH. Get some free: https://cloud.google.com/application/web3/faucet/ethereum/sepolia"
+echo "Wallet $ME  balance ${BAL} $COIN"
+[ "${DRY:-0}" != 1 ] && awk "BEGIN{exit !($BAL < 0.02)}" && die "Need ≥ 0.02 $COIN — use the faucet, or run with DRY=1"
 export OPERATOR_API_KEY="${OPERATOR_API_KEY:-demo-operator-key}"
 [ "${LLM_API_KEY:-none}" = "none" ] && echo "${Y}! LLM_API_KEY not set — AI score will run in offline mode${N}"
-node -e 'const f="project.yaml";const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(/url: .*/,"url: "+process.argv[1]))' "$RPC"
+printf 'staging-settings:\n  rpcs:\n    - chain-name: %s\n      url: %s\n' "$CHAIN_NAME" "$RPC" > project.yaml
 
 # ── 3. CRE login ─────────────────────────────────────────
 step "3/6 Chainlink CRE login"
@@ -49,17 +60,17 @@ if ! cre whoami >/dev/null 2>&1; then echo "A browser will open — sign in to C
 cre whoami | head -3
 
 # ── 4. deploy (once) ──────────────────────────────────────
-step "4/6 Smart contracts on Sepolia"
-if [ -f .deployed-v2 ]; then echo "Already deployed: $(cat .deployed-v2)  (delete .deployed-v2 to redeploy)"
+step "4/6 Smart contracts on $CHAIN"
+if [ -f $DEPLOYED ]; then echo "Already deployed: $(cat $DEPLOYED)  (delete $DEPLOYED to redeploy)"
 else
-  (cd contracts && CRE_ETH_PRIVATE_KEY="$PK" forge script script/Deploy.s.sol --rpc-url "$RPC" --broadcast --slow --evm-version amsterdam 2>&1 | grep -E "USDC|HUB|Error|error" || true)
-  [ -f .deployed-v2 ] || die "Deploy failed — scroll up for the error."
+  (cd contracts && DEPLOY_OUT="../$DEPLOYED" CRE_ETH_PRIVATE_KEY="$PK" forge script script/Deploy.s.sol --rpc-url "$RPC" --broadcast --slow $EVMV 2>&1 | grep -E "USDC|HUB|Error|error" || true)
+  [ -f $DEPLOYED ] || die "Deploy failed — scroll up for the error."
 fi
-HUB=$(tr -d '[:space:]' < .deployed-v2)
-# the script writes .deployed-v2 even when a broadcast tx reverts, so check the hub really has code
-[ "$(cast code "$HUB" --rpc-url "$RPC")" != 0x ] || { rm -f .deployed-v2; die "No contract at $HUB — deploy failed, rerun to redeploy."; }
-node -e 'const f="workflow/config.staging.json";const fs=require("fs");const c=JSON.parse(fs.readFileSync(f));c.hubAddress=process.argv[1];c.secretOwner=process.argv[2];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$HUB" "$ME"
-echo "${G}✓${N} Hub $HUB  → https://sepolia.etherscan.io/address/$HUB"
+HUB=$(tr -d '[:space:]' < $DEPLOYED)
+# the script writes $DEPLOYED even when a broadcast tx reverts, so check the hub really has code
+[ "$(cast code "$HUB" --rpc-url "$RPC")" != 0x ] || { rm -f $DEPLOYED; die "No contract at $HUB — deploy failed, rerun to redeploy."; }
+node -e 'const f="workflow/config.staging.json";const fs=require("fs");const c=JSON.parse(fs.readFileSync(f));c.hubAddress=process.argv[1];c.secretOwner=process.argv[2];c.chainSelectorName=process.argv[3];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$HUB" "$ME" "$CHAIN_NAME"
+echo "${G}✓${N} Hub $HUB  → $EXPLORER/address/$HUB"
 
 # ── 5. mock API + dashboard ───────────────────────────────
 step "5/6 Starting demo server + dashboard"
@@ -67,7 +78,7 @@ step "5/6 Starting demo server + dashboard"
 (cd workflow && [ -d node_modules ] || bun install)
 # always restart, so an old server from a previous version never answers
 OLD=$(lsof -ti tcp:8788 2>/dev/null || true); [ -n "$OLD" ] && kill $OLD 2>/dev/null && sleep 1
-OPERATOR_API_KEY="$OPERATOR_API_KEY" DEPLOYER="$ME" SEPOLIA_RPC="$RPC" nohup node mock-api/server.js > mock-api.log 2>&1 &
+OPERATOR_API_KEY="$OPERATOR_API_KEY" DEPLOYER="$ME" SEPOLIA_RPC="$RPC" EXPLORER="$EXPLORER" DEPLOYED_FILE="$DEPLOYED" nohup node mock-api/server.js > mock-api.log 2>&1 &
 for _ in 1 2 3 4 5 6 7 8 9 10; do curl -s localhost:8788/utility/meter >/dev/null 2>&1 && break; sleep 1; done
 curl -s localhost:8788/operator/telemetry | grep -q solarHourly || die "Demo server did not start — see mock-api.log"
 echo "${G}✓${N} Dashboard: http://localhost:8788"
@@ -91,7 +102,7 @@ run_on_deposit(){
   cast send "$USDC" "mint(address,uint256)" "$ME" 25000000000 --private-key "$PK" --rpc-url "$RPC" >/dev/null
   TX=$(cast send "$HUB" "escrowRevenue(uint256,uint256)" 0 25000000000 --private-key "$PK" --rpc-url "$RPC" --json \
        | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).transactionHash))')
-  echo "📥 Operator escrowed 25,000 USDC → tx https://sepolia.etherscan.io/tx/$TX"
+  echo "📥 Operator escrowed 25,000 USDC → tx $EXPLORER/tx/$TX"
   IDX=$(cast receipt "$TX" --rpc-url "$RPC" --json | node -e '
     let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const t=process.argv[1].toLowerCase();
     const i=JSON.parse(d).logs.findIndex(l=>l.topics[0].toLowerCase()===t);console.log(i<0?0:i)})' \

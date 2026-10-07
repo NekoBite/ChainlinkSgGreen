@@ -35,7 +35,7 @@ table{width:100%;border-collapse:collapse}td,th{padding:8px 6px;border-bottom:1p
   <div class="bars" id="bars"></div><div class="lab" id="lab"></div>
   <div class="k" style="margin-top:10px">Hours certified clean on-chain (latest epoch, vs a 15 MW AI data centre running GPUs 24/7) — <span id="cfe"></span></div>
   <div class="strip" id="strip"></div></div>
-<div class="card" style="margin-top:16px"><div class="k">Epochs settled by Chainlink CRE (read live from Sepolia)</div><table id="eps"></table>
+<div class="card" style="margin-top:16px"><div class="k">Epochs settled by Chainlink CRE (read live from chain)</div><table id="eps"></table>
 <div class="sub" style="margin:10px 0 0" id="hub"></div></div>
 <script>
 const $=id=>document.getElementById(id), usd=n=>n.toLocaleString(undefined,{maximumFractionDigits:2});
@@ -67,7 +67,7 @@ async function tick(){
     const last=c.epochs[0]; const m=last?last.cleanHourMask:0;
     $('strip').innerHTML=Array.from({length:24},(_,h)=>`<b class="${(m>>h)&1?'on':''}" title="${h}:00"></b>`).join('');
     $('cfe').textContent=last?(last.cfePct?`${last.cfePct.toFixed(1)}% carbon-free, ${c.region||''}, ${new Date(last.periodStart*1000).toLocaleDateString()}`:'rejected epoch → no clean hours certified'):'no epochs yet';
-    $('hub').innerHTML=`Hub contract: <a target=_blank href="https://sepolia.etherscan.io/address/${c.hub}#events">${c.hub}</a>`;
+    $('hub').innerHTML=`Hub contract: <a target=_blank href="${c.explorer}/address/${c.hub}#events">${c.hub}</a>`;
   }catch(e){console.log(e)}
 }
 tick(); setInterval(tick,4000);

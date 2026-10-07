@@ -29,6 +29,6 @@ contract Deploy is Script {
         vm.stopBroadcast();
         console.log("USDC", address(usdc));
         console.log("HUB", address(hub));
-        vm.writeFile("../.deployed-v2", string.concat(vm.toString(address(hub)), "\n"));
+        vm.writeFile(vm.envOr("DEPLOY_OUT", string("../.deployed-v2")), string.concat(vm.toString(address(hub)), "\n"));
     }
 }

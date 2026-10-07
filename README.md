@@ -49,6 +49,16 @@ Code: [`onEpochInTee` in `workflow/main.ts`](workflow/main.ts). Run it: `TEE=1 D
 - **Certificates nobody can inflate.** Each 24/7 certificate (period, clean-hour bitmask, CFE %, matched MWh, grid region, GPS) is a public, immutable record that any protocol can read — collateral for green lending, proof for a data centre's ESG report, input to a green bond.
 - **An auditable trail of rejections.** Fraud attempts are recorded too, with an evidence hash of every input the workflow saw.
 
+## Chains
+
+The same workflow and contracts run on any CRE-supported EVM testnet; `CHAIN` in `.env` picks one:
+
+| `CHAIN` | Network | CRE chain name | Simulation forwarder |
+|---|---|---|---|
+| `base` (default) | Base Sepolia | `ethereum-testnet-sepolia-base-1` | `0x82300bd7c3958625581cc2f77bc6464dcecdf3e5` |
+| `fuji` | Avalanche Fuji | `avalanche-testnet-fuji` | `0x2e7371a5d032489e4f60216d8d898a4c10805963` |
+| `sepolia` | Ethereum Sepolia | `ethereum-testnet-sepolia` | `0x15fC6ae953E024d975e77382eEeC56A9101f9F88` |
+
 ## How CRE is used — the orchestration layer
 
 | CRE feature | Where | What it does here |
@@ -75,7 +85,8 @@ git clone https://github.com/NekoBite/ChainlinkSgGreen.git && cd ChainlinkSgGree
 ```
 
 Fill in `.env`:
-- `CRE_ETH_PRIVATE_KEY` — a **testnet-only** wallet with some Sepolia ETH (only needed for deploy/broadcast)
+- `CHAIN` — `base` (Base Sepolia, default), `fuji` (Avalanche Fuji) or `sepolia` (Ethereum Sepolia)
+- `CRE_ETH_PRIVATE_KEY` — a **testnet-only** wallet with gas on that chain (only needed for deploy/broadcast)
 - `LLM_API_KEY` — an Anthropic API key, or `none` to run the AI layer in offline mode
 
 Then:
@@ -83,7 +94,8 @@ Then:
 ```bash
 DRY=1 ./run-demo.sh      # pure CRE simulation — no gas, nothing written on-chain
 TEE=1 DRY=1 ./run-demo.sh # same, through the Confidential Workflow handler (TEE)
-./run-demo.sh            # deploys once, then simulates with --broadcast to Sepolia
+./run-demo.sh            # deploys once to $CHAIN, then simulates with --broadcast
+CHAIN=fuji ./run-demo.sh # same workflow on Avalanche Fuji
 ./run-demo.sh fraud      # a single lying epoch
 ./run-demo.sh honest     # a single honest epoch (EVM log trigger: escrow deposit → settlement)
 ```
@@ -128,9 +140,9 @@ cre workflow simulate ./workflow --target staging-settings --non-interactive --t
 
 | Symptom | Fix |
 |---|---|
-| `Need ≥ 0.02 Sepolia ETH` | Use `DRY=1`, or get testnet ETH from a faucet |
+| `Need ≥ 0.02 … ETH/AVAX` | Use `DRY=1`, or get gas from the Base Sepolia / Avalanche Fuji faucet |
 | `cre login` doesn't open a browser | Copy the URL from the terminal into a browser |
-| `InvalidSender` / no new on-chain record | Wrong forwarder: run `cre workflow supported-chains`, set `FORWARDER=0x…` in `.env`, delete `.deployed-v2`, rerun |
+| `InvalidSender` / no new on-chain record | Wrong forwarder: run `cre workflow supported-chains`, set `FORWARDER=0x…` in `.env`, delete `.deployed-<chain>`, rerun |
 | `epoch done` | That epoch was already settled; rerunning the script starts a new epoch |
 | `LLM HTTP 401` | Invalid Anthropic key; fix it or set `LLM_API_KEY=none` |
 
