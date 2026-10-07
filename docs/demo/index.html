@@ -65,6 +65,7 @@ pre{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--line);
       <a href="https://github.com/NekoBite/ChainlinkSgGreen" target="_blank" rel="noopener">Source code</a>
       <a href="https://github.com/NekoBite/ChainlinkSgGreen/blob/main/evidence/simulation-2026-10-07.log" target="_blank" rel="noopener">CRE simulation log</a>
       <a href="https://sepolia.etherscan.io/address/0xa987b3279C86aF07396209Be3197c57af70ebB74" target="_blank" rel="noopener">GreenYieldHub on Sepolia</a>
+      <a href="https://github.com/NekoBite/ChainlinkSgGreen/blob/main/evidence/tee-simulation-2026-10-07.log" target="_blank" rel="noopener">TEE simulation log</a>
       <a href="https://sepolia.etherscan.io/tx/0x4b2b3ce2d3533cc98ed13aecc5c020b9930a8144d0632feadf57fa3f9ccc1bf3" target="_blank" rel="noopener">Rejection written on-chain</a>
     </div>
   </header>
@@ -102,6 +103,7 @@ pre{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--line);
       <div><b>EVM read</b><span>getSPV(): capacity, battery size, GPS location, escrow</span></div>
       <div><b>HTTP with consensus</b><span>Operator telemetry, utility meter, Open-Meteo hourly irradiance (median across nodes)</span></div>
       <div><b>Confidential HTTP</b><span>LLM trust score; the API key is injected inside the enclave from the Vault DON</span></div>
+      <div><b>Confidential Workflow (TEE)</b><span>handlerInTee on AWS Nitro: the operator's private SCADA feed and API keys are processed only inside the enclave; simulated successfully</span></div>
       <div><b>Report + EVM write</b><span>Signed report → KeystoneForwarder → GreenYieldHub.onReport()</span></div>
       <div><b>On-chain settlement</b><span>Escrowed USDC to SPVToken holders pro-rata, plus a time- and location-stamped certificate</span></div>
     </div>

@@ -40,7 +40,9 @@ Handler 2 registers with `handlerInTee` (AWS Nitro, `us-west-2`) and runs the **
 - The 8 physics rules, the 24/7 matching and the LLM call all run on that raw data in enclave memory.
 - Only **derived conclusions** (verdict, violation mask, clean-hour mask, CFE %, payout, evidence hash) cross back via `usingTheDons()` to be signed by the DON and written on-chain. Chain reads and writes stay on the DON.
 
-Code: [`onEpochInTee` in `workflow/main.ts`](workflow/main.ts). Run it: `TEE=1 DRY=1 ./run-demo.sh` (simulation; live deployment of Confidential Workflows is private beta).
+Code: [`onEpochInTee` in `workflow/main.ts`](workflow/main.ts). Run it: `CHAIN=sepolia TEE=1 DRY=1 ./run-demo.sh` (simulation; live deployment of Confidential Workflows is private beta).
+
+✅ **Simulated successfully** — the CLI reports `Trigger requested TEE Execution … AWS Nitro in us-west-2`; fraud epoch rejected (1/8 rules), honest epoch approved (8/8, 24,222 USDC, 61.1% CFE). Log: [`evidence/tee-simulation-2026-10-07.log`](evidence/tee-simulation-2026-10-07.log).
 
 ## Why it has to be on-chain
 
