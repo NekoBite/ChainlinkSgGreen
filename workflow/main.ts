@@ -325,7 +325,13 @@ const onEpoch = (runtime: Runtime<Config>): string => {
     physicsChecks: p.rules.map((r) => ({ rule: r.name, pass: r.pass, detail: r.detail })),
   });
   let score: number | undefined;
-  if (cfg.useConfidentialHttp) {
+  // Demo switch: LLM_API_KEY=none runs the pattern layer in offline mode (no API call at all)
+  const offline = runtime.getSecret({ id: "LLM_API_KEY" }).result().value === "none";
+  if (offline) {
+    score = p.violations === 0 ? 85 : 10;
+    runtime.log(`🤖 AI pattern layer (offline demo mode, Confidential HTTP path wired): score ${score}/100`);
+  }
+  if (score === undefined && cfg.useConfidentialHttp) {
     try {
       score = askLlmConfidential(runtime, evidence);
       runtime.log(`🤖🔒 AI trust score via Confidential HTTP: ${score}/100`);
