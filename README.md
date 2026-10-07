@@ -44,6 +44,11 @@
 
 ## 🎬 演示时会发生什么
 
+- 说谎期走 **Cron 触发器**（定时结算）。
+- 诚实期走 **EVM Log 触发器**：脚本先让运营方在链上存入 25,000 USDC，CRE 监听到 `RevenueEscrowed` 事件后自动核验。
+- 两期都是 `cre workflow simulate --broadcast`：本地模拟 DON，但报告真实写上 Sepolia（导师确认模拟即可，无需部署）。
+
+
 | 期次 | 运营方报告 | 8 条物理规则 | 24/7 绿电 | 链上结果 |
 |---|---|---|---|---|
 | 🚨 说谎 | 发电 ~1,400 MWh，还声称**半夜也有太阳能** | ❌ 破 7 条 | 自称 92%，**证书 0 小时** | **REJECTED**，付款 0，拒绝记录 + 空证书永久上链 |
@@ -69,11 +74,15 @@
 ## 🏗️ CRE 工作流（`workflow/main.ts`）
 
 ```
-Cron 触发 ─▶ EVM Read  GreenYieldHub.getSPV()   → 装机、电池、经纬度、托管余额
+触发器 0：Cron（每日定时结算）
+触发器 1：EVM Log —— 运营方调用 escrowRevenue() 存入收入 → RevenueEscrowed 事件 → CRE 立即核验
+        ─▶ EVM Read  GreenYieldHub.getSPV()   → 装机、电池、经纬度、托管余额
           ─▶ HTTP      运营方遥测 + 电网电表          (mock-api，共识取中位数)
           ─▶ HTTP      Open-Meteo 逐小时日照           (真实公开 API)
           ─▶ 计算      8 条物理规则 → 违规位掩码；24/7 逐小时匹配 → 小时掩码 + CFE%
-          ─▶ HTTP      Anthropic Claude → 信任分 0-100
+          ─▶ Confidential HTTP  Anthropic Claude → 信任分 0-100
+                       （API key 只在 enclave 里通过 Vault DON 注入 {{.LLM_API_KEY}}，节点运营者看不到；
+                        不可用时自动退回普通 HTTP）
           ─▶ EVM Write 签名报告 → KeystoneForwarder → GreenYieldHub.onReport()
                        通过：释放托管 USDC 给 SPVToken 持有人 + 发 24/7 证书（时间 + 地点）
                        拒绝：写一条 0 收入的审计记录

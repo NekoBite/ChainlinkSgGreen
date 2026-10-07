@@ -18,6 +18,7 @@ import {
   encodeCallMsg,
   getNetwork,
   json,
+  logTriggerConfig,
   LATEST_BLOCK_NUMBER,
   median,
   ok,
@@ -33,6 +34,7 @@ import {
   encodeFunctionData,
   keccak256,
   parseAbi,
+  toHex,
   parseAbiParameters,
   toBytes,
   zeroAddress,
@@ -58,6 +60,8 @@ const configSchema = z.object({
   offPeakUsdPerMWh: z.number(),
   minTrustScore: z.number(),
   offtakeMW: z.number(), // the corporate buyer's flat 24/7 load the plant is matched against
+  useConfidentialHttp: z.boolean(), // send the LLM call through Confidential HTTP (key never visible to nodes)
+  secretOwner: z.string(), // address that owns the LLM_API_KEY Vault DON secret (the workflow owner)
 });
 type Config = z.infer<typeof configSchema>;
 
@@ -185,6 +189,45 @@ const askLlmForTrustScore = (s: HTTPSendRequester, cfg: Config, apiKey: string, 
   return Math.max(0, Math.min(100, n));
 };
 
+const LLM_SYSTEM =
+  "You audit renewable-energy revenue claims for an SPV trustee. The arithmetic checks are already done; " +
+  "you judge whether the whole story is plausible. Reply with ONE integer 0-100 (100 = fully trustworthy). No other text.";
+
+const parseScore = (body: Uint8Array): number => {
+  const out = JSON.parse(new TextDecoder().decode(body)) as { content: { text: string }[] };
+  const n = Number.parseInt(out.content[0].text.trim().match(/\d+/)?.[0] ?? "", 10);
+  if (Number.isNaN(n)) throw new Error("LLM returned no number");
+  return Math.max(0, Math.min(100, n));
+};
+
+/**
+ * Confidential HTTP: the request runs in an enclave and the API key is injected there from the
+ * Vault DON ({{.LLM_API_KEY}}) — no node operator ever sees the key or the evidence we send.
+ */
+const askLlmConfidential = (runtime: Runtime<Config>, evidence: string): number => {
+  const cfg = runtime.config;
+  const resp = new cre.capabilities.ConfidentialHTTPClient()
+    .sendRequest(runtime, {
+      vaultDonSecrets: [{ key: "LLM_API_KEY", owner: cfg.secretOwner }],
+      request: {
+        url: cfg.llmUrl,
+        method: "POST",
+        bodyString: JSON.stringify({
+          model: cfg.llmModel, max_tokens: 10, temperature: 0, system: LLM_SYSTEM,
+          messages: [{ role: "user", content: evidence }],
+        }),
+        multiHeaders: {
+          "content-type": { values: ["application/json"] },
+          "x-api-key": { values: ["{{.LLM_API_KEY}}"] },
+          "anthropic-version": { values: ["2023-06-01"] },
+        },
+      },
+    })
+    .result();
+  if (resp.statusCode < 200 || resp.statusCode >= 300) throw new Error(`LLM HTTP ${resp.statusCode}`);
+  return parseScore(resp.body);
+};
+
 // ───────────────────────── physics layer (deterministic) ─────────────────────────
 type Rule = { bit: number; name: string; pass: boolean; detail: string };
 
@@ -282,20 +325,30 @@ const onEpoch = (runtime: Runtime<Config>): string => {
     telemetry: t, utilityMeterMWh: meterMWh, hourly: { ...hr, cleanHours: hours }, recomputedRevenueUsd: Number(revenueUsd.toFixed(2)),
     physicsChecks: p.rules.map((r) => ({ rule: r.name, pass: r.pass, detail: r.detail })),
   });
-  let score: number;
-  const apiKey = runtime.getSecret({ id: "LLM_API_KEY" }).result().value;
-  if (!apiKey || apiKey === "none") {
-    score = p.violations === 0 ? 85 : 10;
-    runtime.log(`🤖 No LLM key — offline score ${score}`);
-  } else {
+  let score: number | undefined;
+  if (cfg.useConfidentialHttp) {
     try {
-      score = http
-        .sendRequest(runtime, askLlmForTrustScore, consensusMedianAggregation<number>())(cfg, apiKey, evidence)
-        .result();
-      runtime.log(`🤖 AI trust score: ${score}/100`);
+      score = askLlmConfidential(runtime, evidence);
+      runtime.log(`🤖🔒 AI trust score via Confidential HTTP: ${score}/100`);
     } catch (e) {
-      score = p.violations === 0 ? 70 : 0;
-      runtime.log(`🤖 LLM failed (${e}) — fail-safe score ${score}`);
+      runtime.log(`🔒 Confidential HTTP unavailable (${e}) — falling back to standard HTTP`);
+    }
+  }
+  if (score === undefined) {
+    const apiKey = runtime.getSecret({ id: "LLM_API_KEY" }).result().value;
+    if (!apiKey || apiKey === "none") {
+      score = p.violations === 0 ? 85 : 10;
+      runtime.log(`🤖 No LLM key — offline score ${score}`);
+    } else {
+      try {
+        score = http
+          .sendRequest(runtime, askLlmForTrustScore, consensusMedianAggregation<number>())(cfg, apiKey, evidence)
+          .result();
+        runtime.log(`🤖 AI trust score: ${score}/100`);
+      } catch (e) {
+        score = p.violations === 0 ? 70 : 0;
+        runtime.log(`🤖 LLM failed (${e}) — fail-safe score ${score}`);
+      }
     }
   }
 
@@ -323,9 +376,32 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   return JSON.stringify({ epoch: t.epochId, approved, score, violations: p.violations, usdc: usdc.toString(), tx });
 };
 
+/** The operator escrows a period's revenue → CRE verifies it immediately (event-driven settlement). */
+const REVENUE_ESCROWED = keccak256(toHex("RevenueEscrowed(uint256,uint256)"));
+
+const onRevenueEscrowed = (runtime: Runtime<Config>, log: { txHash?: Uint8Array }): string => {
+  runtime.log(`📥 RevenueEscrowed event on-chain${log.txHash ? ` (tx ${bytesToHex(log.txHash)})` : ""} — operator deposited revenue, verifying now`);
+  return onEpoch(runtime);
+};
+
 const initWorkflow = (config: Config) => {
+  const network = getNetwork({ chainFamily: "evm", chainSelectorName: config.chainSelectorName, isTestnet: true });
+  if (!network) throw new Error(`unknown chain ${config.chainSelectorName}`);
+  const evm = new cre.capabilities.EVMClient(network.chainSelector.selector);
   const cron = new cre.capabilities.CronCapability();
-  return [cre.handler(cron.trigger({ schedule: config.schedule }), onEpoch)];
+  return [
+    // 0: scheduled settlement (end of each day)
+    cre.handler(cron.trigger({ schedule: config.schedule }), onEpoch),
+    // 1: event-driven settlement — fires when the operator deposits revenue into escrow
+    cre.handler(
+      evm.logTrigger(logTriggerConfig({
+        addresses: [config.hubAddress as `0x${string}`],
+        topics: [[REVENUE_ESCROWED]],
+        confidence: "LATEST",
+      })),
+      onRevenueEscrowed,
+    ),
+  ];
 };
 
 export async function main() {

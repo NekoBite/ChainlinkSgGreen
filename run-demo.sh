@@ -57,7 +57,7 @@ fi
 HUB=$(tr -d '[:space:]' < .deployed-v2)
 # the script writes .deployed-v2 even when a broadcast tx reverts, so check the hub really has code
 [ "$(cast code "$HUB" --rpc-url "$RPC")" != 0x ] || { rm -f .deployed-v2; die "No contract at $HUB — deploy failed, rerun to redeploy."; }
-node -e 'const f="workflow/config.staging.json";const fs=require("fs");const c=JSON.parse(fs.readFileSync(f));c.hubAddress=process.argv[1];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$HUB"
+node -e 'const f="workflow/config.staging.json";const fs=require("fs");const c=JSON.parse(fs.readFileSync(f));c.hubAddress=process.argv[1];c.secretOwner=process.argv[2];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$HUB" "$ME"
 echo "${G}✓${N} Hub $HUB  → https://sepolia.etherscan.io/address/$HUB"
 
 # ── 5. mock API + dashboard ───────────────────────────────
@@ -72,11 +72,36 @@ echo "${G}✓${N} Dashboard: http://localhost:8788"
 (open http://localhost:8788 || xdg-open http://localhost:8788 || start http://localhost:8788) >/dev/null 2>&1 || true
 
 # ── 6. run epochs through Chainlink CRE ───────────────────
+LOGS="🏭|📡|📥|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🔒|🟢|🔴|⛓️|rror|\[USER LOG\]"
+simulate(){ cre workflow simulate ./workflow --target staging-settings --non-interactive --broadcast "$@" 2>&1 \
+  | tee -a simulate.log | grep -E "$LOGS" | sed 's/.*\[USER LOG\] *//'; }
+
+# Cron trigger (handler 0): the scheduled end-of-day settlement
+run_cron(){ simulate --trigger-index 0; }
+
+# EVM log trigger (handler 1): the operator deposits revenue on-chain → CRE settles automatically
+run_on_deposit(){
+  USDC=$(cast call "$HUB" "usdc()(address)" --rpc-url "$RPC")
+  cast send "$USDC" "mint(address,uint256)" "$ME" 25000000000 --private-key "$PK" --rpc-url "$RPC" >/dev/null
+  TX=$(cast send "$HUB" "escrowRevenue(uint256,uint256)" 0 25000000000 --private-key "$PK" --rpc-url "$RPC" --json \
+       | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).transactionHash))')
+  echo "📥 Operator escrowed 25,000 USDC → tx https://sepolia.etherscan.io/tx/$TX"
+  IDX=$(cast receipt "$TX" --rpc-url "$RPC" --json | node -e '
+    let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const t=process.argv[1].toLowerCase();
+    const i=JSON.parse(d).logs.findIndex(l=>l.topics[0].toLowerCase()===t);console.log(i<0?0:i)})' \
+    "$(cast keccak 'RevenueEscrowed(uint256,uint256)')")
+  if ! simulate --trigger-index 1 --evm-tx-hash "$TX" --evm-event-index "$IDX" | grep -q .; then
+    echo "${Y}! Log-trigger run produced no output — falling back to the cron trigger${N}"; run_cron
+  fi
+}
+
 run_epoch(){
   curl -s -XPOST "localhost:8788/operator/$1" >/dev/null
-  if [ "$1" = fraud ]; then echo "${R}${B}🚨 Epoch: the operator LIES about generation${N}"; else echo "${G}${B}✅ Epoch: the operator reports HONESTLY${N}"; fi
-  cre workflow simulate ./workflow --target staging-settings --non-interactive --trigger-index 0 --broadcast 2>&1 \
-    | tee -a simulate.log | grep -E "🏭|📡|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🟢|🔴|⛓️|rror|\[USER LOG\]" | sed 's/.*\[USER LOG\] *//'
+  if [ "$1" = fraud ]; then
+    echo "${R}${B}🚨 Epoch: the operator LIES about generation (scheduled settlement — cron trigger)${N}"; run_cron
+  else
+    echo "${G}${B}✅ Epoch: the operator reports HONESTLY and deposits revenue (event-driven — EVM log trigger)${N}"; run_on_deposit
+  fi
 }
 step "6/6 Chainlink CRE verifies each epoch"
 case "${1:-all}" in
