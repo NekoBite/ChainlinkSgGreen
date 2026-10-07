@@ -4,7 +4,7 @@
 >
 > An operator lies about generation — and physics catches it before a single dollar moves.
 
-🎥 **Demo video:** _add YouTube link_ · 📊 **Live demo:** https://claude.ai/artifact/4k5XmuZpgqW8LAe9APKXzT · 🧾 **Evidence:** [`evidence/`](evidence/) · ⛓️ **Hub on Sepolia:** [`0xa987…bB74`](https://sepolia.etherscan.io/address/0xa987b3279C86aF07396209Be3197c57af70ebB74)
+🎥 **Demo video:** _add YouTube link_ · 📊 **Live demo:** https://greenyield-spv.ask-jev.workers.dev · 🧾 **Evidence:** [`evidence/`](evidence/) · ⛓️ **Hub on Sepolia:** [`0xa987…bB74`](https://sepolia.etherscan.io/address/0xa987b3279C86aF07396209Be3197c57af70ebB74)
 
 ## The problem
 
