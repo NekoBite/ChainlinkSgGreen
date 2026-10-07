@@ -38,7 +38,7 @@ RPC="${SEPOLIA_RPC:-https://ethereum-sepolia-rpc.publicnode.com}"
 ME=$(cast wallet address --private-key "$PK")
 BAL=$(cast balance "$ME" --rpc-url "$RPC" --ether)
 echo "Wallet $ME  balance ${BAL} Sepolia ETH"
-awk "BEGIN{exit !($BAL < 0.02)}" && die "Need ≥ 0.02 Sepolia ETH. Get some free: https://cloud.google.com/application/web3/faucet/ethereum/sepolia"
+[ "${DRY:-0}" != 1 ] && awk "BEGIN{exit !($BAL < 0.02)}" && die "Need ≥ 0.02 Sepolia ETH. Get some free: https://cloud.google.com/application/web3/faucet/ethereum/sepolia"
 [ "${LLM_API_KEY:-none}" = "none" ] && echo "${Y}! LLM_API_KEY not set — AI score will run in offline mode${N}"
 node -e 'const f="project.yaml";const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(/url: .*/,"url: "+process.argv[1]))' "$RPC"
 
@@ -72,8 +72,10 @@ echo "${G}✓${N} Dashboard: http://localhost:8788"
 (open http://localhost:8788 || xdg-open http://localhost:8788 || start http://localhost:8788) >/dev/null 2>&1 || true
 
 # ── 6. run epochs through Chainlink CRE ───────────────────
+# DRY=1 ./run-demo.sh  → pure simulation: no transactions, no Sepolia ETH needed
+BCAST="--broadcast"; [ "${DRY:-0}" = 1 ] && { BCAST=""; echo "${Y}DRY mode: simulation only — nothing is written on-chain${N}"; }
 LOGS="🏭|📡|📥|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🔒|🟢|🔴|⛓️|rror|\[USER LOG\]"
-simulate(){ cre workflow simulate ./workflow --target staging-settings --non-interactive --broadcast "$@" 2>&1 \
+simulate(){ cre workflow simulate ./workflow --target staging-settings --non-interactive $BCAST "$@" 2>&1 \
   | tee -a simulate.log | grep -E "$LOGS" | sed 's/.*\[USER LOG\] *//'; }
 
 # Cron trigger (handler 0): the scheduled end-of-day settlement
@@ -81,6 +83,7 @@ run_cron(){ simulate --trigger-index 0; }
 
 # EVM log trigger (handler 1): the operator deposits revenue on-chain → CRE settles automatically
 run_on_deposit(){
+  if [ "${DRY:-0}" = 1 ]; then run_cron; return; fi
   USDC=$(cast call "$HUB" "usdc()(address)" --rpc-url "$RPC")
   cast send "$USDC" "mint(address,uint256)" "$ME" 25000000000 --private-key "$PK" --rpc-url "$RPC" >/dev/null
   TX=$(cast send "$HUB" "escrowRevenue(uint256,uint256)" 0 25000000000 --private-key "$PK" --rpc-url "$RPC" --json \
