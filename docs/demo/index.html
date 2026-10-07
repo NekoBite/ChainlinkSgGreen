@@ -1,0 +1,165 @@
+<title>GreenYield SPV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one column "trustee report" — thesis, epoch switcher, the 8-rule ledger, 24-hour strip, settlement, CRE map */
+:root{
+  --bg:#f3f6f2; --surface:#ffffff; --fg:#14211b; --muted:#5c6e65; --line:#d7e0da;
+  --accent:#1f7a52; --sun:#d99a1e; --batt:#2f6fb3; --bad:#c2412d; --good:#1f7a52;
+  --display:"Fraunces", Georgia, serif; --body:"IBM Plex Sans", system-ui, sans-serif; --mono:"IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1714; --surface:#16211d; --fg:#e4eee8; --muted:#93a89d; --line:#26352f;
+  --accent:#4cc18b; --sun:#f0b443; --batt:#6aa8ec; --bad:#ef7462; --good:#4cc18b; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1714; --surface:#16211d; --fg:#e4eee8; --muted:#93a89d; --line:#26352f;
+  --accent:#4cc18b; --sun:#f0b443; --batt:#6aa8ec; --bad:#ef7462; --good:#4cc18b; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:16px/1.55 var(--body)}
+.wrap{max-width:980px;margin:0 auto;padding-inline:20px;padding-block:36px 64px;display:grid;gap:28px}
+h1,h2{font-family:var(--display);text-wrap:balance;margin:0}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.1}
+h2{font-size:22px}
+.eyebrow{font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.lede{max-width:65ch;color:var(--muted);margin:10px 0 0}
+.lede b{color:var(--fg)}
+.links{display:flex;flex-wrap:wrap;gap:10px 18px;font-size:14px}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px;min-width:0}
+.switch{display:flex;gap:8px;flex-wrap:wrap}
+.switch button{font:600 14px var(--body);padding:9px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--fg);cursor:pointer}
+.switch button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.verdict{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 18px}
+.pill{font:600 13px var(--mono);padding:4px 10px;border-radius:999px;letter-spacing:.04em}
+.pill.bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.pill.good{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:16px}
+.stat{border-top:2px solid var(--line);padding-top:8px}
+.stat .k{font:500 11px var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.stat .v{font:600 22px var(--body);font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;font-size:14px}
+.tbl{overflow-x:auto}
+td{padding:9px 8px;border-top:1px solid var(--line);vertical-align:top}
+td.mark{width:28px;font-weight:700}
+td.mark.ok{color:var(--good)} td.mark.no{color:var(--bad)}
+td.detail{font:13px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.hours{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;margin-top:12px}
+.hours span{height:28px;border-radius:3px;background:var(--line)}
+.hours span.on{background:var(--accent)}
+.hlab{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;font:11px var(--mono);color:var(--muted);text-align:center}
+.note{font-size:13px;color:var(--muted);margin:10px 0 0;max-width:70ch}
+.cre{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px 24px;margin-top:12px}
+.cre div{border-left:2px solid var(--accent);padding-left:10px}
+.cre b{display:block;font-size:14px}
+.cre span{font-size:13px;color:var(--muted)}
+pre{font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;margin:12px 0 0}
+@media (prefers-reduced-motion:no-preference){.hours span{transition:background .3s}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">TOKEN2049 Origins · Best Workflow with Chainlink CRE</div>
+    <h1>GreenYield SPV</h1>
+    <p class="lede">AI data centres run GPUs 24 hours a day. Tokenized solar-and-battery plants can power them, but investors only get paid what the plant really earned. <b>A Chainlink CRE workflow acts as the SPV's trustee:</b> it checks each operator report against real sunlight, an independent meter and eight physics rules, then releases revenue to token holders or records a rejection on-chain.</p>
+    <div class="links" style="margin-top:14px">
+      <a href="https://github.com/NekoBite/ChainlinkSgGreen" target="_blank" rel="noopener">Source code</a>
+      <a href="https://github.com/NekoBite/ChainlinkSgGreen/blob/main/evidence/simulation-2026-10-07.log" target="_blank" rel="noopener">CRE simulation log</a>
+      <a href="https://sepolia.etherscan.io/address/0xa987b3279C86aF07396209Be3197c57af70ebB74" target="_blank" rel="noopener">GreenYieldHub on Sepolia</a>
+      <a href="https://sepolia.etherscan.io/tx/0x4b2b3ce2d3533cc98ed13aecc5c020b9930a8144d0632feadf57fa3f9ccc1bf3" target="_blank" rel="noopener">Rejection written on-chain</a>
+    </div>
+  </header>
+
+  <section class="panel" aria-labelledby="ep-h">
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:center">
+      <h2 id="ep-h">Replay a settled epoch</h2>
+      <div class="switch" role="group" aria-label="Choose epoch">
+        <button id="b-fraud" aria-pressed="true">Operator lies</button>
+        <button id="b-honest" aria-pressed="false">Operator is honest</button>
+      </div>
+    </div>
+    <p class="note" style="margin-top:6px">Lopburi Solar + BESS SPV, Thailand (14.8°N, 100.6°E) · 150 MWp solar · 200 MWh battery · Open-Meteo measured 4.55 peak sun hours. Output from the CRE CLI simulator on 7 Oct 2026.</p>
+    <div class="verdict" style="margin-top:16px"><span id="pill" class="pill"></span><span id="headline" style="font-weight:600"></span></div>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="rules-h">
+    <h2 id="rules-h">Physics layer · 8 deterministic rules</h2>
+    <div class="tbl" style="margin-top:10px"><table><tbody id="rules"></tbody></table></div>
+    <p class="note" id="ai"></p>
+  </section>
+
+  <section class="panel" aria-labelledby="h247">
+    <h2 id="h247">24/7 certificate · hours matched against a 15 MW AI data centre</h2>
+    <div class="hours" id="hours" aria-label="Clean hours, 00:00 to 23:00"></div>
+    <div class="hlab" aria-hidden="true" id="hlab"></div>
+    <p class="note" id="cfe"></p>
+  </section>
+
+  <section class="panel" aria-labelledby="cre-h">
+    <h2 id="cre-h">What Chainlink CRE orchestrates</h2>
+    <div class="cre">
+      <div><b>Cron + EVM log triggers</b><span>Daily settlement, or instantly when the operator calls escrowRevenue()</span></div>
+      <div><b>EVM read</b><span>getSPV(): capacity, battery size, GPS location, escrow</span></div>
+      <div><b>HTTP with consensus</b><span>Operator telemetry, utility meter, Open-Meteo hourly irradiance (median across nodes)</span></div>
+      <div><b>Confidential HTTP</b><span>LLM trust score; the API key is injected inside the enclave from the Vault DON</span></div>
+      <div><b>Report + EVM write</b><span>Signed report → KeystoneForwarder → GreenYieldHub.onReport()</span></div>
+      <div><b>On-chain settlement</b><span>Escrowed USDC to SPVToken holders pro-rata, plus a time- and location-stamped certificate</span></div>
+    </div>
+    <pre>DRY=1 ./run-demo.sh   # CRE simulation, no gas
+./run-demo.sh         # simulation with --broadcast to Sepolia</pre>
+  </section>
+</div>
+
+<script>
+const EP = {
+  fraud: {
+    pill: ["REJECTED","bad"], headline: "7 of 8 rules broken. 0 USDC released, 0 clean hours certified.",
+    stats: [["Epoch","1791356630"],["Claimed solar","1,409.0 MWh"],["Claimed revenue","$81,522"],["Paid to holders","0 USDC"]],
+    rules: [
+      [0,"The sun is the limit","solar 1409.0 ≤ 150 MWp × 4.6 h × 0.85 = 580.3"],
+      [0,"One electron, one place","export 1056.8 + charge 422.7 ≤ generated 1409.0"],
+      [1,"A battery cannot create energy","discharge 260.0 ≤ charge 422.7 × 0.9"],
+      [0,"The meter is the referee","exported 1316.8 ≤ utility meter 350.8"],
+      [0,"Discharge within battery rating","discharge 260.0 ≤ 200 MWh (1 cycle/day)"],
+      [0,"Charge within battery rating","charge 422.7 ≤ 200 MWh (1 cycle/day)"],
+      [0,"No sun, no solar (hourly)","225.0 MWh claimed in hours when the sun was down"],
+      [0,"Every hour within its sunlight","574.7 MWh above what each hour's irradiance allows"]],
+    ai: "AI pattern layer: trust score 10/100 (offline demo mode; Confidential HTTP path wired).",
+    hours: "█████···████████████████",
+    cfe: "The operator claimed 89.4% clean coverage by reporting solar at night. Because the epoch was rejected, the certificate written on-chain has zero clean hours."
+  },
+  honest: {
+    pill: ["APPROVED","good"], headline: "8 of 8 rules pass. 24,222 USDC released to SPV token holders.",
+    stats: [["Epoch","1791356631"],["Solar generated","370.0 MWh"],["Battery after sunset","140.8 MWh"],["Paid to holders","24,222 USDC"]],
+    rules: [
+      [1,"The sun is the limit","solar 370.0 ≤ 150 MWp × 4.6 h × 0.85 = 580.3"],
+      [1,"One electron, one place","export 210.0 + charge 160.0 ≤ generated 370.0"],
+      [1,"A battery cannot create energy","discharge 140.8 ≤ charge 160.0 × 0.9"],
+      [1,"The meter is the referee","exported 350.8 ≤ utility meter 350.8"],
+      [1,"Discharge within battery rating","discharge 140.8 ≤ 200 MWh (1 cycle/day)"],
+      [1,"Charge within battery rating","charge 160.0 ≤ 200 MWh (1 cycle/day)"],
+      [1,"No sun, no solar (hourly)","0.0 MWh claimed in hours when the sun was down"],
+      [1,"Every hour within its sunlight","0.0 MWh above what each hour's irradiance allows"]],
+    ai: "AI pattern layer: trust score 85/100 (offline demo mode; Confidential HTTP path wired).",
+    hours: "···········██████·██████",
+    cfe: "61.1% carbon-free, 220.1 MWh matched hour by hour: solar covers midday, the battery covers 18:00–23:00. Certificate recorded with grid region TH-EGAT-Central and the site's coordinates."
+  }
+};
+const $ = id => document.getElementById(id);
+$("hlab").innerHTML = Array.from({length:24},(_,h)=>`<span>${h%3?"":String(h).padStart(2,"0")}</span>`).join("");
+function show(k){
+  const e = EP[k];
+  $("b-fraud").setAttribute("aria-pressed", k==="fraud");
+  $("b-honest").setAttribute("aria-pressed", k==="honest");
+  $("pill").textContent = e.pill[0]; $("pill").className = "pill " + e.pill[1];
+  $("headline").textContent = e.headline;
+  $("stats").innerHTML = e.stats.map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  $("rules").innerHTML = e.rules.map(([ok,n,d])=>`<tr><td class="mark ${ok?"ok":"no"}">${ok?"✓":"✕"}</td><td>${n}</td><td class="detail">${d}</td></tr>`).join("");
+  $("ai").textContent = e.ai;
+  $("hours").innerHTML = [...e.hours].map((c,h)=>`<span class="${c==="█"&&k==="honest"?"on":""}" title="${String(h).padStart(2,"0")}:00"></span>`).join("");
+  $("cfe").textContent = e.cfe;
+}
+$("b-fraud").onclick = () => show("fraud");
+$("b-honest").onclick = () => show("honest");
+show("fraud");
+</script>
