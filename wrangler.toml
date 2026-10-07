@@ -1,0 +1,8 @@
+# Cloudflare Workers static site for the hosted demo (docs/demo/index.html)
+# Deploy:  npx wrangler login   then   npx wrangler deploy
+name = "greenyield-spv"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./docs/demo"
+not_found_handling = "single-page-application"

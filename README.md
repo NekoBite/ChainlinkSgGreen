@@ -125,6 +125,13 @@ evidence/    Simulation logs and on-chain proof
 run-demo.sh  One-command demo
 ```
 
+## Hosted demo (Cloudflare Workers)
+
+```bash
+npx wrangler login     # opens a browser once
+npx wrangler deploy    # publishes docs/demo → https://greenyield-spv.<your-subdomain>.workers.dev
+```
+
 ## Developer commands
 
 ```bash
