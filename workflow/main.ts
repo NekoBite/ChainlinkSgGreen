@@ -166,8 +166,7 @@ const analyseHours = (
 const askLlmForTrustScore = (s: HTTPSendRequester, cfg: Config, apiKey: string, evidence: string): number => {
   const body = {
     model: cfg.llmModel,
-    max_tokens: 10,
-    temperature: 0,
+    max_tokens: 16,
     system:
       "You audit renewable-energy revenue claims for an SPV trustee. The arithmetic checks are already done; " +
       "you judge whether the whole story is plausible. Reply with ONE integer 0-100 (100 = fully trustworthy). No other text.",
@@ -182,7 +181,7 @@ const askLlmForTrustScore = (s: HTTPSendRequester, cfg: Config, apiKey: string, 
       cacheSettings: { store: true, maxAge: "60s" }, // DON nodes share one LLM answer
     })
     .result();
-  if (!ok(r)) throw new Error(`LLM HTTP ${r.statusCode}`);
+  if (!ok(r)) throw new Error(`LLM HTTP ${r.statusCode}: ${new TextDecoder().decode(r.body).slice(0, 160)}`);
   const out = json(r) as { content: { text: string }[] };
   const n = Number.parseInt(out.content[0].text.trim().match(/\d+/)?.[0] ?? "", 10);
   if (Number.isNaN(n)) throw new Error("LLM returned no number");
@@ -213,7 +212,7 @@ const askLlmConfidential = (runtime: Runtime<Config>, evidence: string): number 
         url: cfg.llmUrl,
         method: "POST",
         bodyString: JSON.stringify({
-          model: cfg.llmModel, max_tokens: 10, temperature: 0, system: LLM_SYSTEM,
+          model: cfg.llmModel, max_tokens: 16, system: LLM_SYSTEM,
           messages: [{ role: "user", content: evidence }],
         }),
         multiHeaders: {
@@ -224,7 +223,7 @@ const askLlmConfidential = (runtime: Runtime<Config>, evidence: string): number 
       },
     })
     .result();
-  if (resp.statusCode < 200 || resp.statusCode >= 300) throw new Error(`LLM HTTP ${resp.statusCode}`);
+  if (resp.statusCode < 200 || resp.statusCode >= 300) throw new Error(`LLM HTTP ${resp.statusCode}: ${new TextDecoder().decode(resp.body).slice(0, 160)}`);
   return parseScore(resp.body);
 };
 
