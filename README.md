@@ -1,13 +1,69 @@
-# ☀️🔋 GreenYield SPV — Chainlink CRE
+# ☀️🔋 GreenYield SPV — Chainlink CRE as the trustee for the clean power that runs AI
 
-> **运营方说谎，物理定律先抓住它——一分钱都还没动。**
-> *An operator lies about generation, and physics catches it before a single dollar moves.*
+> **AI needs 24/7 power. 24/7 power needs capital. Capital needs trust. Chainlink CRE provides the trust.**
+>
+> An operator lies about generation — and physics catches it before a single dollar moves.
 
-酒店不拥有大楼（REIT 拥有），航空公司不拥有飞机（租赁公司 / SPV 拥有）。
-绿色资产也一样：**运营方负责维护，SPV 拥有资产，代币持有人拥有收益权。**
-**Chainlink CRE** 当受托人兼审计员：核对数据 → 让 AI 打分 → 在链上分钱（或拒绝）。
+🎥 **Demo video:** _add YouTube link_ · 📊 **Live demo:** _add link_ · 🧾 **Evidence:** [`evidence/`](evidence/) · ⛓️ **Hub on Sepolia:** [`0xa987…bB74`](https://sepolia.etherscan.io/address/0xa987b3279C86aF07396209Be3197c57af70ebB74)
+
+## The problem
+
+GPUs never sleep. AI data centres draw power around the clock, yet today's green certificates are settled **annually** — a data centre can run on fossil power all night and "offset" it with solar bought at noon. Buyers are moving to **24/7 carbon-free energy**: every hour, matched with clean power on the same grid.
+
+Meeting that demand means building **solar + battery** plants, and that needs capital. Tokenizing the plants opens that capital to anyone — like a REIT owns a hotel, an **SPV owns the plant**, the **operator runs it**, and **token holders own the revenue**. But the operator reports the numbers. Who checks them?
+
+## The solution
+
+A **Chainlink CRE workflow is the SPV's independent trustee**. Every epoch it:
+
+1. **Reads the SPV from chain** — capacity, battery size, GPS location, escrowed revenue.
+2. **Pulls the operator's claim and an independent utility meter** (HTTP, median consensus across nodes).
+3. **Pulls real hourly sunlight** for the site from **Open-Meteo**.
+4. **Runs 8 deterministic physics rules** — the sun is the limit · one electron, one place · a battery cannot create energy · the meter is the referee · battery ratings · *no sun, no solar (hourly)* · *every hour within its sunlight*.
+5. **Asks an LLM for one number** — a 0–100 trust score — over **Confidential HTTP**, so the API key and evidence never reach node operators. (Offline score in the recorded demo; physics decides either way.)
+6. **Matches every hour against a 15 MW AI data centre's 24/7 load** → clean-hour bitmask + CFE %.
+7. **Writes a signed report on-chain.** Approved → escrowed USDC is released pro-rata to SPV token holders **and a time- and location-stamped 24/7 certificate** is recorded. Rejected → an auditable zero-revenue record with **zero certified hours**.
+
+| Epoch | Operator says | Physics (8 rules) | 24/7 match | On-chain result |
+|---|---|---|---|---|
+| 🚨 Fraud | 1,409 MWh, incl. solar at 2 a.m. | ❌ 7 fail | claims 89% | **REJECTED** · 0 USDC · 0 certified hours |
+| ✅ Honest | 370 MWh: 210 sold, 160 stored, discharged after sunset | ✅ 8 / 8 | **61.1 %** (sun by day, battery by night) | **APPROVED** · 24,222 USDC to holders · certificate issued |
+
+Full CLI output: [`evidence/simulation-2026-10-07.log`](evidence/simulation-2026-10-07.log).
+
+## Why it has to be on-chain
+
+- **Investor protection without trusting the operator.** Revenue sits in escrow and only the CRE-verified report can release it; the contract also caps payouts at the escrow and refuses replayed epochs.
+- **Fractional, global ownership.** `SPVToken` shares accrue USDC pro-rata and holders pull it with `claim()` — no loops, any number of holders.
+- **Certificates nobody can inflate.** Each 24/7 certificate (period, clean-hour bitmask, CFE %, matched MWh, grid region, GPS) is a public, immutable record that any protocol can read — collateral for green lending, proof for a data centre's ESG report, input to a green bond.
+- **An auditable trail of rejections.** Fraud attempts are recorded too, with an evidence hash of every input the workflow saw.
+
+## How CRE is used — the orchestration layer
+
+| CRE feature | Where | What it does here |
+|---|---|---|
+| **Cron trigger** | [`workflow/main.ts:396`](workflow/main.ts#L396) | Scheduled end-of-day settlement |
+| **EVM log trigger** | [`workflow/main.ts:402`](workflow/main.ts#L402) | Operator calls `escrowRevenue()` → `RevenueEscrowed` → CRE settles immediately |
+| **EVM read** | [`workflow/main.ts:270`](workflow/main.ts#L270) | `getSPV()` — capacity, battery, location, escrow |
+| **HTTP + consensus** | [`workflow/main.ts:287`](workflow/main.ts#L287), [`:293`](workflow/main.ts#L293), [`:301`](workflow/main.ts#L301) | Operator telemetry, utility meter, Open-Meteo hourly irradiance; `ConsensusAggregationByFields` / median |
+| **Confidential HTTP + Vault DON secret** | [`workflow/main.ts:208`](workflow/main.ts#L208) | LLM trust score; `{{.LLM_API_KEY}}` injected inside the enclave |
+| **Secrets** | [`workflow/main.ts:329`](workflow/main.ts#L329) | `runtime.getSecret` for the standard-HTTP fallback |
+| **Report + EVM write** | [`workflow/main.ts:374`](workflow/main.ts#L374) | ABI-encoded report → KeystoneForwarder → `GreenYieldHub.onReport()` |
+| **Receiver contract** | [`contracts/src/GreenYieldHub.sol:105`](contracts/src/GreenYieldHub.sol#L105) | Forwarder-gated `_processReport`: escrow release, `SPVToken.distribute`, certificate |
+
+**Consensus-safe AI:** only one scalar (the trust score) crosses the node boundary; everything else is derived deterministically from consensus-agreed data. The LLM never does arithmetic and never has the final say.
+
+## Run it
+
+```bash
+DRY=1 ./run-demo.sh   # pure CRE simulation — no gas needed
+./run-demo.sh         # simulation with --broadcast: reports are written to Sepolia
+```
+Contracts: `cd contracts && forge test` (3/3 pass).
 
 ---
+
+# 中文说明（团队用）
 
 ## 🚀 一键运行（新手看这里）
 
