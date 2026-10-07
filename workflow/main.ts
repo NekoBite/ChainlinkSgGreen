@@ -306,7 +306,7 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   const psh = hr.peakSunHours;
   runtime.log(`☀️  ${hr.weatherLive ? "Open-Meteo" : "Clear-sky fallback"}: ${psh.toFixed(2)} peak sun hours at the site (hourly data)`);
   const hours = Array.from({ length: 24 }, (_, h) => ((hr.cleanHourMask >> h) & 1 ? "█" : "·")).join("");
-  runtime.log(`🕐 24/7 match vs ${cfg.offtakeMW} MW buyer: ${(hr.cfeBps / 100).toFixed(1)}% CFE, ${hr.greenMWhX10 / 10} MWh hourly-matched`);
+  runtime.log(`🕐 24/7 match vs ${cfg.offtakeMW} MW AI data centre (GPU load): ${(hr.cfeBps / 100).toFixed(1)}% CFE, ${hr.greenMWhX10 / 10} MWh hourly-matched`);
   runtime.log(`   00h ${hours} 23h`);
 
   // 4. Physics
