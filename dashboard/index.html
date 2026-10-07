@@ -11,6 +11,12 @@ h1{margin:0 0 4px;font-size:26px}.sub{color:var(--mut);margin-bottom:20px}
 .pill{display:inline-block;padding:2px 10px;border-radius:99px;font-weight:700;font-size:13px}
 .ok{background:#3ddc9722;color:var(--g)}.bad{background:#ff6b6b22;color:var(--r)}
 table{width:100%;border-collapse:collapse}td,th{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--mut);font-weight:500;font-size:13px}
+.bars{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;align-items:end;height:160px;margin-top:12px}
+.bar{display:flex;flex-direction:column-reverse;height:100%;position:relative}
+.bar i{display:block;width:100%}.sun{background:var(--a)}.bat{background:#5aa9ff}.night{background:#ff6b6b}
+.lab{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;color:var(--mut);font-size:10px;text-align:center}
+.strip{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;margin-top:4px}.strip b{height:10px;border-radius:2px;background:var(--line)}.strip b.on{background:var(--g)}
+.leg span{margin-right:14px;font-size:12px;color:var(--mut)}.leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
 .mode{font-size:22px;font-weight:800}a{color:var(--g)}code{color:var(--a)}
 </style></head><body>
 <h1>☀️🔋 GreenYield SPV</h1>
@@ -24,6 +30,11 @@ table{width:100%;border-collapse:collapse}td,th{padding:8px 6px;border-bottom:1p
   <div class="card"><div class="k">Operator claim vs utility meter</div><table id="claim"></table></div>
   <div class="card"><div class="k">Token holders</div><table id="hold"></table></div>
 </div>
+<div class="card" style="margin-top:16px"><div class="k">24/7 hour-by-hour — operator's claimed day vs the sun (Open-Meteo) · <span id="loc"></span></div>
+  <div class="leg" style="margin-top:6px"><span><i class="sun"></i>Solar delivered</span><span><i class="bat"></i>Battery discharge</span><span><i class="night"></i>"Solar" while the sun was down</span><span><i style="background:var(--fg);height:2px"></i>Sunlight ceiling</span></div>
+  <div class="bars" id="bars"></div><div class="lab" id="lab"></div>
+  <div class="k" style="margin-top:10px">Hours certified clean on-chain (latest epoch, vs 15 MW 24/7 buyer) — <span id="cfe"></span></div>
+  <div class="strip" id="strip"></div></div>
 <div class="card" style="margin-top:16px"><div class="k">Epochs settled by Chainlink CRE (read live from Sepolia)</div><table id="eps"></table>
 <div class="sub" style="margin:10px 0 0" id="hub"></div></div>
 <script>
@@ -38,12 +49,24 @@ async function tick(){
       <tr><td>Battery charged</td><td>${cl.chargeFromSolarMWh+cl.chargeFromGridMWh}</td></tr><tr><td>Battery discharged</td><td>${cl.dischargeMWh}</td></tr>
       <tr><td><b>Claimed total export</b></td><td><b>${(cl.solarExportMWh+cl.dischargeMWh).toFixed(1)}</b></td></tr>
       <tr><td>🔌 Utility meter (truth)</td><td><b>${s.meterMWh}</b></td></tr>`;
+    // 24h chart
+    const irr=s.weather.irradiance, ceil=irr.map(w=>s.site.solarMWp*w/1000*s.site.pr), sh=cl.solarHourly||[], dh=cl.dischargeHourly||[];
+    const mx=Math.max(1,...sh.map((x,h)=>x+dh[h]),...ceil);
+    $('bars').innerHTML=sh.map((x,h)=>{const nightS=irr[h]<5?x:0, day=x-nightS;
+      return `<div class="bar" title="${String(h).padStart(2,'0')}:00 solar ${x} MWh, battery ${(+dh[h]).toFixed(1)} MWh, sun allows ${ceil[h].toFixed(1)}">
+      <i class="sun" style="height:${day/mx*100}%"></i><i class="night" style="height:${nightS/mx*100}%"></i><i class="bat" style="height:${dh[h]/mx*100}%"></i>
+      <span style="position:absolute;left:0;right:0;bottom:${ceil[h]/mx*100}%;border-top:2px solid var(--fg);opacity:.7"></span></div>`}).join('');
+    $('lab').innerHTML=sh.map((_,h)=>`<span>${h%3?'':String(h).padStart(2,'0')}</span>`).join('');
+    $('loc').textContent=`${s.site.lat}°N ${s.site.lon}°E · weather: ${s.weather.source}`;
     if(c.error){$('esc').textContent='—';$('paid').textContent='—';$('eps').innerHTML=`<tr><td>${c.error}</td></tr>`;return}
     $('esc').textContent=usd(c.escrowUsdc); $('paid').textContent=usd(c.totalPaidUsdc);
     $('hold').innerHTML='<tr><th>Holder</th><th>Shares</th><th>Claimable USDC</th></tr>'+c.holders.map(h=>`<tr><td>${h.label}</td><td>${(h.shares/1e4).toFixed(0)}%</td><td style="color:var(--g)">${usd(h.claimableUsdc)}</td></tr>`).join('');
-    $('eps').innerHTML='<tr><th>Epoch</th><th>Verdict</th><th>AI score</th><th>Physics</th><th>Paid USDC</th><th>Time</th></tr>'+
+    $('eps').innerHTML='<tr><th>Epoch</th><th>Verdict</th><th>AI score</th><th>Physics</th><th>24/7 CFE</th><th>Paid USDC</th><th>Time</th></tr>'+
       (c.epochs.length?c.epochs.map(e=>{const v=e.violations.toString(2).split('').filter(x=>x==='1').length;
-      return `<tr><td>${e.epochId}</td><td><span class="pill ${e.approved?'ok':'bad'}">${e.approved?'APPROVED':'REJECTED'}</span></td><td>${e.aiScore}/100</td><td>${v?`❌ ${v} of 6 rules broken`:'✅ 6/6 passed'}</td><td>${usd(e.paidUsdc)}</td><td>${new Date(e.timestamp*1000).toLocaleTimeString()}</td></tr>`}).join(''):'<tr><td>No epochs yet</td></tr>');
+      return `<tr><td>${e.epochId}</td><td><span class="pill ${e.approved?'ok':'bad'}">${e.approved?'APPROVED':'REJECTED'}</span></td><td>${e.aiScore}/100</td><td>${v?`❌ ${v} of 6 rules broken`:'✅ 6/6 passed'}</td><td>${e.cfePct?e.cfePct.toFixed(1)+'% · '+e.greenMWh+' MWh':'0 — no certificate'}</td><td>${usd(e.paidUsdc)}</td><td>${new Date(e.timestamp*1000).toLocaleTimeString()}</td></tr>`}).join(''):'<tr><td>No epochs yet</td></tr>');
+    const last=c.epochs[0]; const m=last?last.cleanHourMask:0;
+    $('strip').innerHTML=Array.from({length:24},(_,h)=>`<b class="${(m>>h)&1?'on':''}" title="${h}:00"></b>`).join('');
+    $('cfe').textContent=last?(last.cfePct?`${last.cfePct.toFixed(1)}% carbon-free, ${c.region||''}, ${new Date(last.periodStart*1000).toLocaleDateString()}`:'rejected epoch → no clean hours certified'):'no epochs yet';
     $('hub').innerHTML=`Hub contract: <a target=_blank href="https://sepolia.etherscan.io/address/${c.hub}#events">${c.hub}</a>`;
   }catch(e){console.log(e)}
 }

@@ -49,14 +49,14 @@ cre whoami | head -3
 
 # ── 4. deploy (once) ──────────────────────────────────────
 step "4/6 Smart contracts on Sepolia"
-if [ -f .deployed ]; then echo "Already deployed: $(cat .deployed)  (delete .deployed to redeploy)"
+if [ -f .deployed-v2 ]; then echo "Already deployed: $(cat .deployed-v2)  (delete .deployed-v2 to redeploy)"
 else
   (cd contracts && CRE_ETH_PRIVATE_KEY="$PK" forge script script/Deploy.s.sol --rpc-url "$RPC" --broadcast --slow --evm-version amsterdam 2>&1 | grep -E "USDC|HUB|Error|error" || true)
-  [ -f .deployed ] || die "Deploy failed — scroll up for the error."
+  [ -f .deployed-v2 ] || die "Deploy failed — scroll up for the error."
 fi
-HUB=$(tr -d '[:space:]' < .deployed)
-# the script writes .deployed even when a broadcast tx reverts, so check the hub really has code
-[ "$(cast code "$HUB" --rpc-url "$RPC")" != 0x ] || { rm -f .deployed; die "No contract at $HUB — deploy failed, rerun to redeploy."; }
+HUB=$(tr -d '[:space:]' < .deployed-v2)
+# the script writes .deployed-v2 even when a broadcast tx reverts, so check the hub really has code
+[ "$(cast code "$HUB" --rpc-url "$RPC")" != 0x ] || { rm -f .deployed-v2; die "No contract at $HUB — deploy failed, rerun to redeploy."; }
 node -e 'const f="workflow/config.staging.json";const fs=require("fs");const c=JSON.parse(fs.readFileSync(f));c.hubAddress=process.argv[1];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$HUB"
 echo "${G}✓${N} Hub $HUB  → https://sepolia.etherscan.io/address/$HUB"
 
@@ -76,7 +76,7 @@ run_epoch(){
   curl -s -XPOST "localhost:8788/operator/$1" >/dev/null
   if [ "$1" = fraud ]; then echo "${R}${B}🚨 Epoch: the operator LIES about generation${N}"; else echo "${G}${B}✅ Epoch: the operator reports HONESTLY${N}"; fi
   cre workflow simulate ./workflow --target staging-settings --non-interactive --trigger-index 0 --broadcast 2>&1 \
-    | tee -a simulate.log | grep -E "🏭|📡|🔌|☀️|✅|❌|💵|🤖|🟢|🔴|⛓️|rror|\[USER LOG\]" | sed 's/.*\[USER LOG\] *//'
+    | tee -a simulate.log | grep -E "🏭|📡|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🟢|🔴|⛓️|rror|\[USER LOG\]" | sed 's/.*\[USER LOG\] *//'
 }
 step "6/6 Chainlink CRE verifies each epoch"
 case "${1:-all}" in

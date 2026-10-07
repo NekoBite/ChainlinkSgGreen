@@ -32,15 +32,43 @@ contract GreenYieldHub is ReceiverTemplate {
         uint64 timestamp;
     }
 
+    /// 24/7 granular certificate for one epoch: which local hours were covered by clean energy,
+    /// where (the SPV's grid region + coordinates) and when (periodStart = local midnight, unix).
+    struct Certificate {
+        uint64 periodStart;
+        uint32 cleanHourMask;  // bit h set = hour h (local time) fully matched by clean energy
+        uint16 cfeBps;         // 24/7 carbon-free-energy score in basis points (10000 = 100%)
+        uint32 greenMWhX10;    // hourly-matched clean MWh × 10
+    }
+
+    /// Report payload written by the CRE workflow (abi-encoded, no selector).
+    struct Report {
+        uint256 spvId;
+        uint64 epochId;
+        bool approved;
+        uint8 aiScore;
+        uint16 violations;
+        uint256 claimedUsdc;
+        bytes32 evidenceHash;
+        uint64 periodStart;
+        uint32 cleanHourMask;
+        uint16 cfeBps;
+        uint32 greenMWhX10;
+    }
+
     IERC20 public immutable usdc;
     SPV[] internal spvs;
     Epoch[] public epochs;
+    Certificate[] public certificates;              // same index as `epochs`
+    mapping(uint256 => string) public gridRegion;   // e.g. "TH-EGAT-Central"
     mapping(uint256 => mapping(uint64 => bool)) public processed;
 
     event SPVRegistered(uint256 indexed spvId, string name, address token);
     event RevenueEscrowed(uint256 indexed spvId, uint256 amount);
     event EpochSettled(uint256 indexed spvId, uint64 indexed epochId, bool approved, uint8 aiScore,
                        uint16 violations, uint256 claimedUsdc, uint256 paidUsdc, bytes32 evidenceHash);
+    event CertificateIssued(uint256 indexed spvId, uint64 indexed epochId, string gridRegion, uint64 periodStart,
+        uint32 cleanHourMask, uint16 cfeBps, uint32 greenMWhX10);
 
     constructor(address forwarder, IERC20 _usdc) ReceiverTemplate(forwarder) { usdc = _usdc; }
 
@@ -54,6 +82,8 @@ contract GreenYieldHub is ReceiverTemplate {
         spvs.push(SPV(name, operator, t, solarMWp, batteryMWh, latE4, lonE4, 0, 0));
         emit SPVRegistered(id, name, address(t));
     }
+
+    function setGridRegion(uint256 spvId, string calldata region) external onlyOwner { gridRegion[spvId] = region; }
 
     function escrowRevenue(uint256 spvId, uint256 amount) external {
         usdc.transferFrom(msg.sender, address(this), amount);
@@ -72,17 +102,15 @@ contract GreenYieldHub is ReceiverTemplate {
     }
 
     // ---- CRE entry point (called by ReceiverTemplate.onReport after forwarder check) ----
-    function _processReport(bytes calldata report) internal override {
-        (uint256 spvId, uint64 epochId, bool approved, uint8 aiScore, uint16 violations,
-         uint256 claimedUsdc, bytes32 evidenceHash) =
-            abi.decode(report, (uint256, uint64, bool, uint8, uint16, uint256, bytes32));
-        require(!processed[spvId][epochId], "epoch done");
-        processed[spvId][epochId] = true;
+    function _processReport(bytes calldata raw) internal override {
+        Report memory r = abi.decode(raw, (Report));
+        require(!processed[r.spvId][r.epochId], "epoch done");
+        processed[r.spvId][r.epochId] = true;
 
-        SPV storage s = spvs[spvId];
+        SPV storage s = spvs[r.spvId];
         uint256 paid;
-        if (approved && violations == 0) {
-            paid = claimedUsdc < s.escrow ? claimedUsdc : s.escrow;
+        if (r.approved && r.violations == 0) {
+            paid = r.claimedUsdc < s.escrow ? r.claimedUsdc : s.escrow;
             if (paid > 0) {
                 s.escrow -= paid;
                 s.totalPaid += paid;
@@ -90,8 +118,15 @@ contract GreenYieldHub is ReceiverTemplate {
                 s.token.distribute(paid);
             }
         }
-        epochs.push(Epoch(spvId, epochId, approved, aiScore, violations, claimedUsdc, paid, evidenceHash,
-                          uint64(block.timestamp)));
-        emit EpochSettled(spvId, epochId, approved, aiScore, violations, claimedUsdc, paid, evidenceHash);
+        epochs.push(Epoch(r.spvId, r.epochId, r.approved, r.aiScore, r.violations, r.claimedUsdc, paid,
+                          r.evidenceHash, uint64(block.timestamp)));
+        // A rejected epoch earns no certificate: zero clean hours on record.
+        Certificate memory c = r.approved && r.violations == 0
+            ? Certificate(r.periodStart, r.cleanHourMask, r.cfeBps, r.greenMWhX10)
+            : Certificate(r.periodStart, 0, 0, 0);
+        certificates.push(c);
+        emit EpochSettled(r.spvId, r.epochId, r.approved, r.aiScore, r.violations, r.claimedUsdc, paid, r.evidenceHash);
+        emit CertificateIssued(r.spvId, r.epochId, gridRegion[r.spvId], c.periodStart, c.cleanHourMask, c.cfeBps,
+            c.greenMWhX10);
     }
 }

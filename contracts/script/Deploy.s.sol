@@ -21,13 +21,14 @@ contract Deploy is Script {
         s[0] = 500_000e18; s[1] = 300_000e18; s[2] = 200_000e18;
         // Lopburi, Thailand — real utility-scale solar region
         SPVToken token = new SPVToken("Lopburi Solar + BESS SPV", "SPV", address(hub), usdc, h, s);
-        hub.registerSPV("Lopburi Solar + BESS SPV", me, token, 80, 200, 148000, 1006000);
+        hub.registerSPV("Lopburi Solar + BESS SPV", me, token, 150, 200, 148000, 1006000);
+        hub.setGridRegion(0, "TH-EGAT-Central (Thailand)");
         usdc.mint(me, 100_000e6);
         usdc.approve(address(hub), type(uint256).max);
         hub.escrowRevenue(0, 100_000e6);
         vm.stopBroadcast();
         console.log("USDC", address(usdc));
         console.log("HUB", address(hub));
-        vm.writeFile("../.deployed", string.concat(vm.toString(address(hub)), "\n"));
+        vm.writeFile("../.deployed-v2", string.concat(vm.toString(address(hub)), "\n"));
     }
 }

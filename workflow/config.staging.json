@@ -13,5 +13,6 @@
   "ppaUsdPerMWh": 55,
   "peakUsdPerMWh": 90,
   "offPeakUsdPerMWh": 40,
-  "minTrustScore": 60
+  "minTrustScore": 60,
+  "offtakeMW": 15
 }

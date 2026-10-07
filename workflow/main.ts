@@ -4,10 +4,11 @@
  * Every epoch:
  *   1. EVM read   — SPV facts from GreenYieldHub (capacity, location, escrow)
  *   2. HTTP       — operator telemetry + independent utility meter (mock API)
- *   3. HTTP       — Open-Meteo solar irradiance for the site (real public API)
- *   4. Physics    — 6 deterministic rules → violation bitmask (no LLM here)
+ *   3. HTTP       — Open-Meteo HOURLY irradiance for the site → 24/7 hour-by-hour matching
+ *   4. Physics    — 8 deterministic rules (6 daily + 2 hourly) → violation bitmask (no LLM here)
  *   5. LLM        — one number: 0-100 trust score (the only AI output on the wire)
- *   6. EVM write  — signed report → hub releases escrow to holders, or records a rejection
+ *   6. EVM write  — signed report → hub releases escrow + issues a time/location-stamped 24/7
+ *                   certificate, or records a rejection with zero clean hours
  */
 import {
   bytesToHex,
@@ -56,6 +57,7 @@ const configSchema = z.object({
   peakUsdPerMWh: z.number(),
   offPeakUsdPerMWh: z.number(),
   minTrustScore: z.number(),
+  offtakeMW: z.number(), // the corporate buyer's flat 24/7 load the plant is matched against
 });
 type Config = z.infer<typeof configSchema>;
 
@@ -68,7 +70,23 @@ type Telemetry = {
   chargeFromGridMWh: number; // bought off-peak
   dischargeMWh: number; // sold into the evening peak
   claimedRevenueUsd: number; // what the operator says it earned
+  periodStart: number; // local midnight of the epoch's day (unix seconds)
 };
+
+/** 24/7 hourly analysis — computed per node from the hourly arrays, then agreed field by field. */
+type Hourly = {
+  peakSunHours: number; // Σ hourly irradiance / 1000
+  weatherLive: number; // 1 = Open-Meteo, 0 = clear-sky fallback
+  nightSolarMWh: number; // solar claimed in hours when the sun was down
+  hourlyExcessMWh: number; // solar claimed above what each hour's sunlight allows
+  cleanHourMask: number; // bit h = hour h fully covered by clean energy
+  cfeBps: number; // 24/7 carbon-free-energy score
+  greenMWhX10: number; // hourly-matched clean MWh × 10
+};
+const hourlySchema = z.object({
+  peakSunHours: z.number(), weatherLive: z.number(), nightSolarMWh: z.number(), hourlyExcessMWh: z.number(),
+  cleanHourMask: z.number(), cfeBps: z.number(), greenMWhX10: z.number(),
+});
 const telemetrySchema = z.object({
   epochId: z.number(),
   solarGenMWh: z.number(),
@@ -77,6 +95,7 @@ const telemetrySchema = z.object({
   chargeFromGridMWh: z.number(),
   dischargeMWh: z.number(),
   claimedRevenueUsd: z.number(),
+  periodStart: z.number(),
 });
 
 const HUB_ABI = parseAbi([
@@ -96,11 +115,48 @@ const fetchMeter = (s: HTTPSendRequester, url: string): number => {
   return Number((json(r) as { exportMWh: number }).exportMWh);
 };
 
-const fetchPeakSunHours = (s: HTTPSendRequester, url: string): number => {
-  const r = s.sendRequest({ url, method: "GET" }).result();
-  if (!ok(r)) throw new Error(`weather HTTP ${r.statusCode}`);
-  const d = json(r) as { daily: { shortwave_radiation_sum: number[] } };
-  return d.daily.shortwave_radiation_sum[0] / 3.6; // MJ/m² → kWh/m² = peak sun hours
+/** Same deterministic clear-sky curve the mock API falls back to: 06:00–18:00, peak 900 W/m². */
+const fallbackIrradiance = () =>
+  Array.from({ length: 24 }, (_, h) => (h >= 6 && h <= 18 ? Math.round(900 * Math.sin(((h - 6) / 12) * Math.PI)) : 0));
+
+const analyseHours = (
+  s: HTTPSendRequester, telemetryUrl: string, weatherUrl: string, solarMWp: number, pr: number, offtakeMW: number,
+): Hourly => {
+  const tr = s.sendRequest({ url: telemetryUrl, method: "GET" }).result();
+  if (!ok(tr)) throw new Error(`telemetry HTTP ${tr.statusCode}`);
+  const t = json(tr) as { solarHourly: number[]; dischargeHourly: number[]; solarGenMWh: number; solarExportMWh: number };
+
+  let irr = fallbackIrradiance();
+  let weatherLive = 0;
+  try {
+    const wr = s.sendRequest({ url: weatherUrl, method: "GET" }).result();
+    if (ok(wr)) {
+      const w = (json(wr) as { hourly: { shortwave_radiation: number[] } }).hourly.shortwave_radiation.slice(0, 24);
+      if (w.length === 24) { irr = w.map(Number); weatherLive = 1; }
+    }
+  } catch (_) { /* keep fallback */ }
+
+  const exportShare = t.solarGenMWh > 0 ? t.solarExportMWh / t.solarGenMWh : 0;
+  let night = 0, excess = 0, mask = 0, covered = 0;
+  for (let h = 0; h < 24; h++) {
+    const solar = t.solarHourly[h] ?? 0;
+    const ceiling = (solarMWp * irr[h] / 1000) * pr; // MWh this hour's sunlight allows
+    if (irr[h] < 5) night += solar;
+    else excess += Math.max(0, solar - ceiling * 1.05);
+    const clean = solar * exportShare + (t.dischargeHourly[h] ?? 0); // clean MWh delivered this hour
+    const c = Math.min(offtakeMW, clean);
+    covered += c;
+    if (c >= offtakeMW * 0.999) mask |= 1 << h;
+  }
+  return {
+    peakSunHours: irr.reduce((a, b) => a + b, 0) / 1000,
+    weatherLive,
+    nightSolarMWh: Math.round(night * 100) / 100,
+    hourlyExcessMWh: Math.round(excess * 100) / 100,
+    cleanHourMask: mask,
+    cfeBps: Math.round((covered / (offtakeMW * 24)) * 10000),
+    greenMWhX10: Math.round(covered * 10),
+  };
 };
 
 const askLlmForTrustScore = (s: HTTPSendRequester, cfg: Config, apiKey: string, evidence: string): number => {
@@ -132,7 +188,8 @@ const askLlmForTrustScore = (s: HTTPSendRequester, cfg: Config, apiKey: string, 
 // ───────────────────────── physics layer (deterministic) ─────────────────────────
 type Rule = { bit: number; name: string; pass: boolean; detail: string };
 
-const physics = (t: Telemetry, meterMWh: number, solarMWp: number, batteryMWh: number, psh: number, cfg: Config) => {
+const physics = (t: Telemetry, hr: Hourly, meterMWh: number, solarMWp: number, batteryMWh: number, cfg: Config) => {
+  const psh = hr.peakSunHours;
   const sunCeiling = solarMWp * psh * cfg.performanceRatio;
   const charged = t.chargeFromSolarMWh + t.chargeFromGridMWh;
   const f = (x: number) => x.toFixed(1);
@@ -149,6 +206,10 @@ const physics = (t: Telemetry, meterMWh: number, solarMWp: number, batteryMWh: n
       detail: `discharge ${f(t.dischargeMWh)} ≤ ${batteryMWh} MWh (1 cycle/day)` },
     { bit: 32, name: "Charge within battery rating", pass: charged <= batteryMWh,
       detail: `charge ${f(charged)} ≤ ${batteryMWh} MWh (1 cycle/day)` },
+    { bit: 64, name: "No sun, no solar (hourly)", pass: hr.nightSolarMWh <= 0.5,
+      detail: `${f(hr.nightSolarMWh)} MWh of solar claimed in hours when the sun was down` },
+    { bit: 128, name: "Every hour within its sunlight", pass: hr.hourlyExcessMWh <= 0.5,
+      detail: `${f(hr.hourlyExcessMWh)} MWh claimed above what each hour's irradiance allows` },
   ];
   const violations = rules.reduce((m, r) => (r.pass ? m : m | r.bit), 0);
   return { rules, violations, sunCeiling };
@@ -183,7 +244,7 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   const t = http
     .sendRequest(runtime, fetchTelemetry, ConsensusAggregationByFields<Telemetry>({
       epochId: median, solarGenMWh: median, solarExportMWh: median, chargeFromSolarMWh: median,
-      chargeFromGridMWh: median, dischargeMWh: median, claimedRevenueUsd: median,
+      chargeFromGridMWh: median, dischargeMWh: median, claimedRevenueUsd: median, periodStart: median,
     }), { schema: telemetrySchema })(`${cfg.mockApiUrl}/operator/telemetry`)
     .result();
   const meterMWh = http
@@ -192,18 +253,22 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   runtime.log(`📡 Epoch ${t.epochId} operator claims: solar ${t.solarGenMWh} MWh, export ${t.solarExportMWh}, charge ${t.chargeFromSolarMWh}+${t.chargeFromGridMWh}, discharge ${t.dischargeMWh}, revenue $${t.claimedRevenueUsd}`);
   runtime.log(`🔌 Utility meter says exported: ${meterMWh} MWh`);
 
-  // 3. Independent weather data
-  let psh = cfg.fallbackPeakSunHours;
-  try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=shortwave_radiation_sum&past_days=1&forecast_days=1&timezone=auto`;
-    psh = http.sendRequest(runtime, fetchPeakSunHours, consensusMedianAggregation<number>())(url).result();
-    runtime.log(`☀️  Open-Meteo: ${psh.toFixed(2)} peak sun hours yesterday at the site`);
-  } catch (e) {
-    runtime.log(`☀️  Weather API unavailable, using fallback ${psh} peak sun hours`);
-  }
+  // 3. Hour-by-hour: operator's hourly profile vs Open-Meteo hourly irradiance (24/7 matching)
+  const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=shortwave_radiation&past_days=1&forecast_days=1&timezone=auto`;
+  const hr = http
+    .sendRequest(runtime, analyseHours, ConsensusAggregationByFields<Hourly>({
+      peakSunHours: median, weatherLive: median, nightSolarMWh: median, hourlyExcessMWh: median,
+      cleanHourMask: median, cfeBps: median, greenMWhX10: median,
+    }), { schema: hourlySchema })(`${cfg.mockApiUrl}/operator/telemetry`, weatherUrl, solarMWp, cfg.performanceRatio, cfg.offtakeMW)
+    .result();
+  const psh = hr.peakSunHours;
+  runtime.log(`☀️  ${hr.weatherLive ? "Open-Meteo" : "Clear-sky fallback"}: ${psh.toFixed(2)} peak sun hours at the site (hourly data)`);
+  const hours = Array.from({ length: 24 }, (_, h) => ((hr.cleanHourMask >> h) & 1 ? "█" : "·")).join("");
+  runtime.log(`🕐 24/7 match vs ${cfg.offtakeMW} MW buyer: ${(hr.cfeBps / 100).toFixed(1)}% CFE, ${hr.greenMWhX10 / 10} MWh hourly-matched`);
+  runtime.log(`   00h ${hours} 23h`);
 
   // 4. Physics
-  const p = physics(t, meterMWh, solarMWp, batteryMWh, psh, cfg);
+  const p = physics(t, hr, meterMWh, solarMWp, batteryMWh, cfg);
   for (const r of p.rules) runtime.log(`   ${r.pass ? "✅" : "❌"} ${r.name}: ${r.detail}`);
 
   // Revenue is recomputed from metered energy — never taken from the operator's claim
@@ -214,7 +279,7 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   // 5. AI pattern layer → one scalar
   const evidence = JSON.stringify({
     spv: name, epoch: t.epochId, capacity: { solarMWp, batteryMWh }, peakSunHours: Number(psh.toFixed(2)),
-    telemetry: t, utilityMeterMWh: meterMWh, recomputedRevenueUsd: Number(revenueUsd.toFixed(2)),
+    telemetry: t, utilityMeterMWh: meterMWh, hourly: { ...hr, cleanHours: hours }, recomputedRevenueUsd: Number(revenueUsd.toFixed(2)),
     physicsChecks: p.rules.map((r) => ({ rule: r.name, pass: r.pass, detail: r.detail })),
   });
   let score: number;
@@ -239,12 +304,14 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   const usdc = approved ? BigInt(Math.round(Math.max(0, revenueUsd) * 1e6)) : 0n;
   const evidenceHash = keccak256(toBytes(evidence));
   runtime.log(approved
-    ? `🟢 APPROVED — releasing ${Number(usdc) / 1e6} USDC to SPV token holders`
+    ? `🟢 APPROVED — releasing ${Number(usdc) / 1e6} USDC to SPV token holders + 24/7 certificate (${(hr.cfeBps / 100).toFixed(1)}% CFE)`
     : `🔴 REJECTED — ${p.rules.filter((r) => !r.pass).length} physics violation(s), AI ${score}. Writing a zero-revenue record.`);
 
   const payload = encodeAbiParameters(
-    parseAbiParameters("uint256, uint64, bool, uint8, uint16, uint256, bytes32"),
-    [BigInt(cfg.spvId), BigInt(t.epochId), approved, score, p.violations, usdc, evidenceHash],
+    // matches GreenYieldHub.Report (all static fields → identical to a flat tuple)
+    parseAbiParameters("uint256, uint64, bool, uint8, uint16, uint256, bytes32, uint64, uint32, uint16, uint32"),
+    [BigInt(cfg.spvId), BigInt(t.epochId), approved, score, p.violations, usdc, evidenceHash,
+     BigInt(t.periodStart), hr.cleanHourMask, hr.cfeBps, hr.greenMWhX10],
   );
   const report = runtime.report(prepareReportRequest(payload)).result();
   const w = evm

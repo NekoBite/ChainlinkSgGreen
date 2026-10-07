@@ -1,5 +1,5 @@
 .env
-.deployed
+.deployed*
 node_modules/
 contracts/out/
 contracts/cache/
