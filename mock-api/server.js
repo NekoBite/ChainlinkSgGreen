@@ -116,6 +116,14 @@ http.createServer(async (req, res) => {
   const url = req.url.split("?")[0];
   try {
     if (url === "/operator/telemetry") return send(res, 200, { epochId: state.epochId, periodStart: weather.periodStart, ...CLAIMS[state.mode] });
+    // Private SCADA feed (hour-by-hour dispatch data) — requires the operator's API token.
+    // Only the CRE Confidential Workflow (inside the TEE) holds that token.
+    if (url === "/operator/scada") {
+      const auth = req.headers.authorization || "";
+      const want = process.env.OPERATOR_API_KEY || "";
+      if (!auth.startsWith("Bearer ") || (want && auth !== `Bearer ${want}`)) return send(res, 401, { error: "operator token required" });
+      return send(res, 200, { epochId: state.epochId, periodStart: weather.periodStart, ...CLAIMS[state.mode] });
+    }
     if (url === "/utility/meter") return send(res, 200, { epochId: state.epochId, exportMWh: METER });
     if (req.method === "POST" && (url === "/operator/fraud" || url === "/operator/honest")) {
       await loadWeather(); CLAIMS = buildClaims(); METER = CLAIMS.meterMWh;

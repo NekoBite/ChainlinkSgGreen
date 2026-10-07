@@ -31,6 +31,17 @@ A **Chainlink CRE workflow is the SPV's independent trustee**. Every epoch it:
 
 Full CLI output: [`evidence/simulation-2026-10-07.log`](evidence/simulation-2026-10-07.log).
 
+## Confidential Workflow (TEE)
+
+Handler 2 registers with `handlerInTee` (AWS Nitro, `us-west-2`) and runs the **entire verification inside the enclave**:
+
+- `OPERATOR_API_KEY` and `LLM_API_KEY` are fetched from the Vault DON **inside** the enclave.
+- The operator's **private hour-by-hour SCADA feed** (`/operator/scada`, token-protected) is fetched inside the enclave. Hourly dispatch reveals battery-arbitrage strategy, so it is commercially sensitive.
+- The 8 physics rules, the 24/7 matching and the LLM call all run on that raw data in enclave memory.
+- Only **derived conclusions** (verdict, violation mask, clean-hour mask, CFE %, payout, evidence hash) cross back via `usingTheDons()` to be signed by the DON and written on-chain. Chain reads and writes stay on the DON.
+
+Code: [`onEpochInTee` in `workflow/main.ts`](workflow/main.ts). Run it: `TEE=1 DRY=1 ./run-demo.sh` (simulation; live deployment of Confidential Workflows is private beta).
+
 ## Why it has to be on-chain
 
 - **Investor protection without trusting the operator.** Revenue sits in escrow and only the CRE-verified report can release it; the contract also caps payouts at the escrow and refuses replayed epochs.
@@ -48,6 +59,7 @@ Full CLI output: [`evidence/simulation-2026-10-07.log`](evidence/simulation-2026
 | **HTTP + consensus** | [`workflow/main.ts:287`](workflow/main.ts#L287), [`:293`](workflow/main.ts#L293), [`:301`](workflow/main.ts#L301) | Operator telemetry, utility meter, Open-Meteo hourly irradiance; `ConsensusAggregationByFields` / median |
 | **Confidential HTTP + Vault DON secret** | [`workflow/main.ts:208`](workflow/main.ts#L208) | LLM trust score; `{{.LLM_API_KEY}}` injected inside the enclave |
 | **Secrets** | [`workflow/main.ts:329`](workflow/main.ts#L329) | `runtime.getSecret` for the standard-HTTP fallback |
+| **Confidential Workflow (`handlerInTee`)** | `workflow/main.ts` → `onEpochInTee` | Whole verification in a TEE on the operator's private SCADA feed; only conclusions cross back via `usingTheDons()` |
 | **Report + EVM write** | [`workflow/main.ts:374`](workflow/main.ts#L374) | ABI-encoded report → KeystoneForwarder → `GreenYieldHub.onReport()` |
 | **Receiver contract** | [`contracts/src/GreenYieldHub.sol:105`](contracts/src/GreenYieldHub.sol#L105) | Forwarder-gated `_processReport`: escrow release, `SPVToken.distribute`, certificate |
 
@@ -70,6 +82,7 @@ Then:
 
 ```bash
 DRY=1 ./run-demo.sh      # pure CRE simulation — no gas, nothing written on-chain
+TEE=1 DRY=1 ./run-demo.sh # same, through the Confidential Workflow handler (TEE)
 ./run-demo.sh            # deploys once, then simulates with --broadcast to Sepolia
 ./run-demo.sh fraud      # a single lying epoch
 ./run-demo.sh honest     # a single honest epoch (EVM log trigger: escrow deposit → settlement)

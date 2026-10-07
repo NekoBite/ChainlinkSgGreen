@@ -17,6 +17,7 @@ import {
   cre,
   encodeCallMsg,
   getNetwork,
+  handlerInTee,
   json,
   logTriggerConfig,
   LATEST_BLOCK_NUMBER,
@@ -27,6 +28,7 @@ import {
   TxStatus,
   type HTTPSendRequester,
   type Runtime,
+  type TeeRuntime,
 } from "@chainlink/cre-sdk";
 import {
   decodeFunctionResult,
@@ -128,7 +130,7 @@ const analyseHours = (
 ): Hourly => {
   const tr = s.sendRequest({ url: telemetryUrl, method: "GET" }).result();
   if (!ok(tr)) throw new Error(`telemetry HTTP ${tr.statusCode}`);
-  const t = json(tr) as { solarHourly: number[]; dischargeHourly: number[]; solarGenMWh: number; solarExportMWh: number };
+  const t = json(tr) as HourlyClaim;
 
   let irr = fallbackIrradiance();
   let weatherLive = 0;
@@ -140,6 +142,15 @@ const analyseHours = (
     }
   } catch (_) { /* keep fallback */ }
 
+  return computeHourly(t, irr, weatherLive, solarMWp, pr, offtakeMW);
+};
+
+type HourlyClaim = { solarHourly: number[]; dischargeHourly: number[]; solarGenMWh: number; solarExportMWh: number };
+
+/** Pure 24/7 analysis — used by the DON handlers and inside the TEE. */
+const computeHourly = (
+  t: HourlyClaim, irr: number[], weatherLive: number, solarMWp: number, pr: number, offtakeMW: number,
+): Hourly => {
   const exportShare = t.solarGenMWh > 0 ? t.solarExportMWh / t.solarGenMWh : 0;
   let night = 0, excess = 0, mask = 0, covered = 0;
   for (let h = 0; h < 24; h++) {
@@ -381,6 +392,112 @@ const onEpoch = (runtime: Runtime<Config>): string => {
   return JSON.stringify({ epoch: t.epochId, approved, score, violations: p.violations, usdc: usdc.toString(), tx });
 };
 
+// ───────────────────────── Confidential Workflow (TEE) ─────────────────────────
+/**
+ * Handler 2 runs inside a hardware-isolated enclave (AWS Nitro).
+ *
+ * The operator's hour-by-hour SCADA feed is commercially sensitive (it reveals dispatch strategy and
+ * battery arbitrage), and its API token must never be visible to node operators. So the enclave:
+ *   • fetches OPERATOR_API_KEY and LLM_API_KEY from the Vault DON,
+ *   • pulls the private SCADA feed, the utility meter and Open-Meteo,
+ *   • runs all 8 physics rules, the 24/7 matching and the LLM call,
+ * and only derived conclusions (verdict, violation mask, clean-hour mask, CFE %, payout, evidence hash)
+ * cross back to the DON via usingTheDons() to be signed and written on-chain.
+ */
+const onEpochInTee = (runtime: TeeRuntime<Config>): string => {
+  const cfg = runtime.config;
+  const don = runtime.usingTheDons(); // chain I/O and report signing stay on the DON
+  const network = getNetwork({ chainFamily: "evm", chainSelectorName: cfg.chainSelectorName, isTestnet: true });
+  if (!network) throw new Error(`unknown chain ${cfg.chainSelectorName}`);
+  const evm = new cre.capabilities.EVMClient(network.chainSelector.selector);
+
+  // Public facts from chain
+  const call = evm.callContract(don, {
+    call: encodeCallMsg({
+      from: zeroAddress, to: cfg.hubAddress as Address,
+      data: encodeFunctionData({ abi: HUB_ABI, functionName: "getSPV", args: [BigInt(cfg.spvId)] }),
+    }),
+    blockNumber: LATEST_BLOCK_NUMBER,
+  }).result();
+  const [name, , solarMWp, batteryMWh, latE4, lonE4] = decodeFunctionResult({
+    abi: HUB_ABI, functionName: "getSPV", data: bytesToHex(call.data),
+  });
+  const lat = latE4 / 1e4, lon = lonE4 / 1e4;
+
+  // ── inside the enclave from here ──
+  const http = new cre.capabilities.HTTPClient();
+  const operatorKey = runtime.getSecret({ id: "OPERATOR_API_KEY" }).result().value;
+  const scada = http.sendRequest(runtime, {
+    url: `${cfg.mockApiUrl}/operator/scada`, method: "GET",
+    multiHeaders: { authorization: { values: [`Bearer ${operatorKey}`] } },
+  }).result();
+  if (!ok(scada)) throw new Error(`SCADA HTTP ${scada.statusCode}`);
+  const t = telemetrySchema.parse(json(scada)) as Telemetry;
+  const claim = json(scada) as HourlyClaim;
+  const meterResp = http.sendRequest(runtime, { url: `${cfg.mockApiUrl}/utility/meter`, method: "GET" }).result();
+  if (!ok(meterResp)) throw new Error(`meter HTTP ${meterResp.statusCode}`);
+  const meterMWh = Number((json(meterResp) as { exportMWh: number }).exportMWh);
+
+  let irr = fallbackIrradiance();
+  let weatherLive = 0;
+  try {
+    const wr = http.sendRequest(runtime, {
+      url: `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=shortwave_radiation&past_days=1&forecast_days=1&timezone=auto`,
+      method: "GET",
+    }).result();
+    if (ok(wr)) {
+      const w = (json(wr) as { hourly: { shortwave_radiation: number[] } }).hourly.shortwave_radiation.slice(0, 24);
+      if (w.length === 24) { irr = w.map(Number); weatherLive = 1; }
+    }
+  } catch (_) { /* keep fallback */ }
+
+  const hr = computeHourly(claim, irr, weatherLive, solarMWp, cfg.performanceRatio, cfg.offtakeMW);
+  const p = physics(t, hr, meterMWh, solarMWp, batteryMWh, cfg);
+  const revenueUsd =
+    t.solarExportMWh * cfg.ppaUsdPerMWh + t.dischargeMWh * cfg.peakUsdPerMWh - t.chargeFromGridMWh * cfg.offPeakUsdPerMWh;
+  const evidence = JSON.stringify({ spv: name, epoch: t.epochId, telemetry: claim, utilityMeterMWh: meterMWh, hourly: hr,
+    physicsChecks: p.rules.map((r) => ({ rule: r.name, pass: r.pass })) });
+
+  const llmKey = runtime.getSecret({ id: "LLM_API_KEY" }).result().value;
+  let score = p.violations === 0 ? 85 : 10;
+  if (llmKey && llmKey !== "none") {
+    try {
+      const r = http.sendRequest(runtime, {
+        url: cfg.llmUrl, method: "POST",
+        multiHeaders: {
+          "content-type": { values: ["application/json"] },
+          "x-api-key": { values: [llmKey] },
+          "anthropic-version": { values: ["2023-06-01"] },
+        },
+        body: Buffer.from(JSON.stringify({ model: cfg.llmModel, max_tokens: 16, system: LLM_SYSTEM,
+          messages: [{ role: "user", content: evidence }] })).toString("base64"),
+      }).result();
+      if (ok(r)) score = parseScore(r.body);
+    } catch (_) { /* keep deterministic score */ }
+  }
+
+  const approved = p.violations === 0 && score >= cfg.minTrustScore;
+  const usdc = approved ? BigInt(Math.round(Math.max(0, revenueUsd) * 1e6)) : 0n;
+  // Simulation-only enclave log: conclusions only, never the raw feed or keys
+  runtime.log(`🔐 [TEE] private SCADA feed for "${name}" epoch ${t.epochId} processed inside the enclave (raw hourly data + API keys never leave it)`);
+  runtime.log(`🔐 [TEE] ${p.rules.filter((r) => r.pass).length}/8 physics rules pass · 24/7 CFE ${(hr.cfeBps / 100).toFixed(1)}% · AI ${score}/100`);
+
+  // ── cross back: only derived values leave the enclave ──
+  const payload = encodeAbiParameters(
+    parseAbiParameters("uint256, uint64, bool, uint8, uint16, uint256, bytes32, uint64, uint32, uint16, uint32"),
+    [BigInt(cfg.spvId), BigInt(t.epochId), approved, score, p.violations, usdc, keccak256(toBytes(evidence)),
+     BigInt(t.periodStart), approved ? hr.cleanHourMask : 0, approved ? hr.cfeBps : 0, approved ? hr.greenMWhX10 : 0],
+  );
+  const report = don.report(prepareReportRequest(payload)).result();
+  const w = evm.writeReport(don, { receiver: cfg.hubAddress, report, gasConfig: { gasLimit: cfg.gasLimit } }).result();
+  if (w.txStatus !== TxStatus.SUCCESS) throw new Error(`write failed: ${w.errorMessage ?? w.txStatus}`);
+  const tx = bytesToHex(w.txHash ?? new Uint8Array(32));
+  don.log(approved
+    ? `🟢 APPROVED (verified in TEE) — releasing ${Number(usdc) / 1e6} USDC + 24/7 certificate · tx ${tx}`
+    : `🔴 REJECTED (verified in TEE) — ${p.rules.filter((r) => !r.pass).length} physics violation(s) · zero-revenue record · tx ${tx}`);
+  return JSON.stringify({ epoch: t.epochId, approved, score, violations: p.violations, usdc: usdc.toString(), tx, tee: true });
+};
+
 /** The operator escrows a period's revenue → CRE verifies it immediately (event-driven settlement). */
 const REVENUE_ESCROWED = keccak256(toHex("RevenueEscrowed(uint256,uint256)"));
 
@@ -406,6 +523,8 @@ const initWorkflow = (config: Config) => {
       })),
       onRevenueEscrowed,
     ),
+    // 2: Confidential Workflow — the whole verification runs inside a TEE on the operator's private SCADA feed
+    handlerInTee(cron.trigger({ schedule: config.schedule }), onEpochInTee, [{ tee: "nitro", regions: ["us-west-2"] }]),
   ];
 };
 

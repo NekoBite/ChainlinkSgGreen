@@ -39,6 +39,7 @@ ME=$(cast wallet address --private-key "$PK")
 BAL=$(cast balance "$ME" --rpc-url "$RPC" --ether)
 echo "Wallet $ME  balance ${BAL} Sepolia ETH"
 [ "${DRY:-0}" != 1 ] && awk "BEGIN{exit !($BAL < 0.02)}" && die "Need ≥ 0.02 Sepolia ETH. Get some free: https://cloud.google.com/application/web3/faucet/ethereum/sepolia"
+export OPERATOR_API_KEY="${OPERATOR_API_KEY:-demo-operator-key}"
 [ "${LLM_API_KEY:-none}" = "none" ] && echo "${Y}! LLM_API_KEY not set — AI score will run in offline mode${N}"
 node -e 'const f="project.yaml";const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(/url: .*/,"url: "+process.argv[1]))' "$RPC"
 
@@ -66,16 +67,17 @@ step "5/6 Starting demo server + dashboard"
 (cd workflow && [ -d node_modules ] || bun install)
 # always restart, so an old server from a previous version never answers
 OLD=$(lsof -ti tcp:8788 2>/dev/null || true); [ -n "$OLD" ] && kill $OLD 2>/dev/null && sleep 1
-DEPLOYER="$ME" SEPOLIA_RPC="$RPC" nohup node mock-api/server.js > mock-api.log 2>&1 &
+OPERATOR_API_KEY="$OPERATOR_API_KEY" DEPLOYER="$ME" SEPOLIA_RPC="$RPC" nohup node mock-api/server.js > mock-api.log 2>&1 &
 for _ in 1 2 3 4 5 6 7 8 9 10; do curl -s localhost:8788/utility/meter >/dev/null 2>&1 && break; sleep 1; done
 curl -s localhost:8788/operator/telemetry | grep -q solarHourly || die "Demo server did not start — see mock-api.log"
 echo "${G}✓${N} Dashboard: http://localhost:8788"
 (open http://localhost:8788 || xdg-open http://localhost:8788 || start http://localhost:8788) >/dev/null 2>&1 || true
 
 # ── 6. run epochs through Chainlink CRE ───────────────────
+# TEE=1 ./run-demo.sh  → both epochs through the Confidential Workflow handler (TEE)
 # DRY=1 ./run-demo.sh  → pure simulation: no transactions, no Sepolia ETH needed
 BCAST="--broadcast"; [ "${DRY:-0}" = 1 ] && { BCAST=""; echo "${Y}DRY mode: simulation only — nothing is written on-chain${N}"; }
-LOGS="🏭|📡|📥|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🔒|🟢|🔴|⛓️|rror|ERR|ail|anic|\[USER LOG\]"
+LOGS="🔐|🏭|📡|📥|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🔒|🟢|🔴|⛓️|rror|ERR|ail|anic|\[USER LOG\]"
 simulate(){ cre workflow simulate ./workflow --target staging-settings --non-interactive $BCAST "$@" 2>&1 \
   | tee -a simulate.log | grep -E "$LOGS" | sed 's/.*\[USER LOG\] *//'; }
 
@@ -99,8 +101,16 @@ run_on_deposit(){
   fi
 }
 
+# Confidential Workflow (handler 2): the whole verification runs inside a TEE
+run_tee(){ simulate --trigger-index 2; }
+
 run_epoch(){
   curl -s -XPOST "localhost:8788/operator/$1" >/dev/null
+  if [ "${TEE:-0}" = 1 ]; then
+    if [ "$1" = fraud ]; then echo "${R}${B}🚨🔐 Epoch: the operator LIES — verified inside a TEE (Confidential Workflow)${N}";
+    else echo "${G}${B}✅🔐 Epoch: the operator is HONEST — verified inside a TEE (Confidential Workflow)${N}"; fi
+    run_tee; return
+  fi
   if [ "$1" = fraud ]; then
     echo "${R}${B}🚨 Epoch: the operator LIES about generation (scheduled settlement — cron trigger)${N}"; run_cron
   else
