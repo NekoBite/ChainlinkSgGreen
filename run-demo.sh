@@ -64,17 +64,18 @@ echo "${G}✓${N} Hub $HUB  → https://sepolia.etherscan.io/address/$HUB"
 step "5/6 Starting demo server + dashboard"
 (cd mock-api && [ -d node_modules ] || npm install --silent)
 (cd workflow && [ -d node_modules ] || bun install)
-if ! curl -s localhost:8788/state >/dev/null 2>&1; then
-  DEPLOYER="$ME" SEPOLIA_RPC="$RPC" nohup node mock-api/server.js > mock-api.log 2>&1 &
-  sleep 2
-fi
+# always restart, so an old server from a previous version never answers
+OLD=$(lsof -ti tcp:8788 2>/dev/null || true); [ -n "$OLD" ] && kill $OLD 2>/dev/null && sleep 1
+DEPLOYER="$ME" SEPOLIA_RPC="$RPC" nohup node mock-api/server.js > mock-api.log 2>&1 &
+for _ in 1 2 3 4 5 6 7 8 9 10; do curl -s localhost:8788/utility/meter >/dev/null 2>&1 && break; sleep 1; done
+curl -s localhost:8788/operator/telemetry | grep -q solarHourly || die "Demo server did not start — see mock-api.log"
 echo "${G}✓${N} Dashboard: http://localhost:8788"
 (open http://localhost:8788 || xdg-open http://localhost:8788 || start http://localhost:8788) >/dev/null 2>&1 || true
 
 # ── 6. run epochs through Chainlink CRE ───────────────────
 # DRY=1 ./run-demo.sh  → pure simulation: no transactions, no Sepolia ETH needed
 BCAST="--broadcast"; [ "${DRY:-0}" = 1 ] && { BCAST=""; echo "${Y}DRY mode: simulation only — nothing is written on-chain${N}"; }
-LOGS="🏭|📡|📥|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🔒|🟢|🔴|⛓️|rror|\[USER LOG\]"
+LOGS="🏭|📡|📥|🔌|☀️|🕐|00h|✅|❌|💵|🤖|🔒|🟢|🔴|⛓️|rror|ERR|ail|anic|\[USER LOG\]"
 simulate(){ cre workflow simulate ./workflow --target staging-settings --non-interactive $BCAST "$@" 2>&1 \
   | tee -a simulate.log | grep -E "$LOGS" | sed 's/.*\[USER LOG\] *//'; }
 
